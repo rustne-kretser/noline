@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "noline",
+    "noline-example",
+]
