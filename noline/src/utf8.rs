@@ -80,6 +80,23 @@ impl Utf8Char {
         c
     }
 
+    #[cfg(test)]
+    pub(crate) fn to_char(&self) -> char {
+        char::from_u32(
+            self.as_bytes()
+                .iter()
+                .fold(0, |codepoint, &b| match b.utf8_byte_type() {
+                    Utf8ByteType::SingleByte => b as u32,
+                    Utf8ByteType::StartTwoByte => (b & 0x1f) as u32,
+                    Utf8ByteType::StartThreeByte => (b & 0xf) as u32,
+                    Utf8ByteType::StartFourByte => (b & 0x7) as u32,
+                    Utf8ByteType::Continuation => (codepoint << 6) | (b & 0x3f) as u32,
+                    Utf8ByteType::Invalid => unreachable!(),
+                }),
+        )
+        .unwrap()
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf[0..(self.len as usize)]
     }
@@ -259,5 +276,10 @@ mod tests {
 
         assert_eq!(parser.advance(0b11000000), Utf8DecoderStatus::Continuation);
         assert_eq!(parser.advance(0b00000000), Utf8DecoderStatus::Error);
+    }
+
+    #[test]
+    fn to_char() {
+        assert_eq!(Utf8Char::from_str("€").to_char(), '€');
     }
 }

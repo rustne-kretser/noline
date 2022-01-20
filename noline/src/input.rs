@@ -51,24 +51,52 @@ impl ControlCharacter {
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum CSI {
-    CUU,
-    CUD,
-    CUF,
-    CUB,
+    CUU(usize),
+    CUD(usize),
+    CUF(usize),
+    CUB(usize),
     CPR(usize, usize),
+    CUP(usize, usize),
+    ED(usize),
+    DSR,
+    SU(usize),
+    SD(usize),
+    Home,
+    Delete,
+    End,
     Unknown(u8),
 }
 
 impl CSI {
     fn new(byte: u8, arg1: Option<usize>, arg2: Option<usize>) -> Option<Self> {
-        match byte {
-            0x41 => Some(Self::CUU),
-            0x42 => Some(Self::CUD),
-            0x43 => Some(Self::CUF),
-            0x44 => Some(Self::CUB),
-            0x52 => Some(Self::CPR(arg1.unwrap(), arg2.unwrap())),
-            _ => Some(Self::Unknown(byte)),
-        }
+        let c = byte as char;
+
+        Some(match c {
+            'A' => Self::CUU(arg1.unwrap_or(1)),
+            'B' => Self::CUD(arg1.unwrap_or(1)),
+            'C' => Self::CUF(arg1.unwrap_or(1)),
+            'D' => Self::CUB(arg1.unwrap_or(1)),
+            'H' => Self::CUP(arg1.unwrap_or(1), arg2.unwrap_or(1)),
+            'J' => Self::ED(arg1.unwrap_or(0)),
+            'R' => Self::CPR(arg1.unwrap(), arg2.unwrap()),
+            'S' => Self::SU(arg1.unwrap_or(1)),
+            'T' => Self::SD(arg1.unwrap_or(1)),
+            'n' => Self::DSR,
+            '~' => {
+                if let Some(arg) = arg1 {
+                    let arg = arg;
+                    match arg {
+                        1 => Self::Home,
+                        3 => Self::Delete,
+                        4 => Self::End,
+                        _ => Self::Unknown(byte),
+                    }
+                } else {
+                    Self::Unknown(byte)
+                }
+            }
+            _ => Self::Unknown(byte),
+        })
     }
 }
 
@@ -91,16 +119,8 @@ impl Action {
         Action::ControlCharacter(ControlCharacter::new(byte).unwrap())
     }
 
-    fn csi_0_arg(byte: u8) -> Self {
-        Action::ControlSequenceIntroducer(CSI::new(byte, None, None).unwrap())
-    }
-
-    fn csi_1_arg(byte: u8, arg1: usize) -> Self {
-        Action::ControlSequenceIntroducer(CSI::new(byte, Some(arg1), None).unwrap())
-    }
-
-    fn csi_2_arg(byte: u8, arg1: usize, arg2: usize) -> Self {
-        Action::ControlSequenceIntroducer(CSI::new(byte, Some(arg1), Some(arg2)).unwrap())
+    fn csi(byte: u8, arg1: Option<usize>, arg2: Option<usize>) -> Self {
+        Action::ControlSequenceIntroducer(CSI::new(byte, arg1, arg2).unwrap())
     }
 }
 
@@ -110,8 +130,8 @@ enum State {
     Utf8Sequence(Option<Utf8Decoder>),
     EscapeSequence,
     CSIStart,
-    CSIArg1(usize),
-    CSIArg2(usize, usize),
+    CSIArg1(Option<usize>),
+    CSIArg2(Option<usize>, Option<usize>),
 }
 
 pub struct Parser {
@@ -176,40 +196,44 @@ impl Parser {
             State::CSIStart => match byte {
                 0x30..=0x39 => {
                     let value: usize = (byte - 0x30) as usize;
-                    self.state = State::CSIArg1(value);
+                    self.state = State::CSIArg1(Some(value));
+                    Action::Ignore
+                }
+                0x3b => {
+                    self.state = State::CSIArg2(None, None);
                     Action::Ignore
                 }
                 0x40..=0x7e => {
                     self.state = State::Ground;
-                    Action::csi_0_arg(byte)
+                    Action::csi(byte, None, None)
                 }
                 _ => Action::Ignore,
             },
             State::CSIArg1(value) => match byte {
                 0x30..=0x39 => {
-                    let value: usize = value * 10 + (byte - 0x30) as usize;
-                    self.state = State::CSIArg1(value);
+                    let value: usize = value.unwrap_or(0) * 10 + (byte - 0x30) as usize;
+                    self.state = State::CSIArg1(Some(value));
                     Action::Ignore
                 }
                 0x3b => {
-                    self.state = State::CSIArg2(value, 0);
+                    self.state = State::CSIArg2(value, None);
                     Action::Ignore
                 }
                 0x40..=0x7e => {
                     self.state = State::Ground;
-                    Action::csi_1_arg(byte, value)
+                    Action::csi(byte, value, None)
                 }
                 _ => Action::Ignore,
             },
             State::CSIArg2(arg1, arg2) => match byte {
                 0x30..=0x39 => {
-                    let arg2: usize = arg2 * 10 + (byte - 0x30) as usize;
-                    self.state = State::CSIArg2(arg1, arg2);
+                    let arg2: usize = arg2.unwrap_or(0) * 10 + (byte - 0x30) as usize;
+                    self.state = State::CSIArg2(arg1, Some(arg2));
                     Action::Ignore
                 }
                 0x40..=0x7e => {
                     self.state = State::Ground;
-                    Action::csi_2_arg(byte, arg1, arg2)
+                    Action::csi(byte, arg1, arg2)
                 }
                 _ => Action::Ignore,
             },
@@ -242,6 +266,32 @@ pub(crate) mod tests {
     impl AsByteVec for Vec<ControlCharacter> {
         fn as_byte_vec(self) -> Vec<u8> {
             self.into_iter().map(|c| c.into()).collect()
+        }
+    }
+
+    impl<const N: usize> AsByteVec for [ControlCharacter; N] {
+        fn as_byte_vec(self) -> Vec<u8> {
+            self.into_iter().map(|c| c.into()).collect()
+        }
+    }
+
+    impl AsByteVec for Vec<&str> {
+        fn as_byte_vec(self) -> Vec<u8> {
+            self.into_iter()
+                .map(|s| s.as_bytes().into_iter())
+                .flatten()
+                .map(|&b| b)
+                .collect()
+        }
+    }
+
+    impl<const N: usize> AsByteVec for [&str; N] {
+        fn as_byte_vec(self) -> Vec<u8> {
+            self.into_iter()
+                .map(|s| s.as_bytes().into_iter())
+                .flatten()
+                .map(|&b| b)
+                .collect()
         }
     }
 
@@ -279,5 +329,61 @@ pub(crate) mod tests {
         while let Some(action) = actions.pop() {
             assert_eq!(action, Action::Ignore);
         }
+
+        let mut actions = input_sequence(&mut parser, "\x1b[A");
+
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::CUU(1))
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[10B");
+
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::CUD(10))
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[H");
+
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::CUP(1, 1))
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[2;5H");
+
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::CUP(2, 5))
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[;5H");
+
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::CUP(1, 5))
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[17;H");
+
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::CUP(17, 1))
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[;H");
+
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::CUP(1, 1))
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[;10H");
+
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::CUP(1, 10))
+        );
     }
 }
