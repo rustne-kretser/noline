@@ -277,6 +277,78 @@ pub mod sync {
     }
 }
 
+#[cfg(any(test, feature = "embedded"))]
+pub mod embedded {
+    pub mod sync {
+        use super::super::*;
+        use crate::line_buffer::LineBuffer;
+        use crate::terminal::TerminalInitializer;
+        use embedded_hal::serial::{Read, Write};
+        use nb::block;
+
+        fn write<W: Write<u8>>(tx: &mut W, buf: &[u8]) -> Result<(), ()> {
+            for b in buf {
+                if block!(tx.write(*b)).is_err() {
+                    return Err(());
+                }
+            }
+
+            Ok(())
+        }
+
+        pub fn readline<'a, B: Buffer, W: Write<u8>, R: Read<u8>>(
+            buffer: &'a mut LineBuffer<B>,
+            prompt: &'a str,
+            rx: &mut R,
+            tx: &mut W,
+        ) -> Result<&'a str, ()> {
+            let mut init = TerminalInitializer::new();
+
+            write(tx, init.init())?;
+
+            let terminal = loop {
+                if let Ok(b) = block!(rx.read()) {
+                    match init.advance(b) {
+                        Ok(Some(terminal)) => break terminal,
+                        Ok(None) => (),
+                        Err(()) => return Err(()),
+                    }
+                } else {
+                    return Err(());
+                }
+            };
+
+            let mut noline = Noline::new(buffer, prompt, terminal);
+
+            for bytes in noline.print_prompt().iter_bytes().unwrap() {
+                write(tx, bytes.as_bytes())?;
+            }
+
+            while let Ok(b) = block!(rx.read()) {
+                let mut status = noline.advance(b);
+
+                if let Some(output) = status.iter_bytes() {
+                    for bytes in output {
+                        write(tx, bytes.as_bytes())?;
+                    }
+                }
+
+                if let Some(rc) = status.is_done() {
+                    drop(status);
+
+                    if rc.is_ok() {
+                        return Ok(noline.buffer.as_str());
+                    } else {
+                        return Err(());
+                    }
+                }
+            }
+
+            return Err(());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::vec::Vec;
