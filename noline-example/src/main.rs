@@ -1,4 +1,4 @@
-use noline::sync::readline;
+use noline::sync::with_std::readline;
 use std::io::{self, Write};
 use termion::raw::IntoRawMode;
 

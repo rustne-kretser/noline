@@ -1,5 +1,3 @@
-use crate::input::{Action, Parser, CSI};
-
 fn distance_from_window(start: isize, end: isize, point: isize) -> isize {
     if point < start {
         point as isize - start as isize
@@ -147,54 +145,6 @@ impl Terminal {
     }
 }
 
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-enum TerminalInitializerState {
-    New,
-    Position(Cursor),
-    Done,
-}
-
-pub struct TerminalInitializer {
-    state: TerminalInitializerState,
-    parser: Parser,
-}
-
-impl TerminalInitializer {
-    pub fn new() -> Self {
-        Self {
-            state: TerminalInitializerState::New,
-            parser: Parser::new(),
-        }
-    }
-
-    pub fn init(&self) -> &'static [u8] {
-        "\x1b[6n\x1b7\x1b[999;999H\x1b[6n\x1b8".as_bytes()
-    }
-
-    pub fn advance(&mut self, byte: u8) -> Result<Option<Terminal>, ()> {
-        let action = self.parser.advance(byte);
-
-        #[cfg(test)]
-        dbg!(byte, action, &self.state);
-
-        match action {
-            Action::ControlSequenceIntroducer(CSI::CPR(x, y)) => match self.state {
-                TerminalInitializerState::New => {
-                    self.state = TerminalInitializerState::Position(Cursor::new(x - 1, y - 1));
-                    Ok(None)
-                }
-                TerminalInitializerState::Position(pos) => {
-                    self.state = TerminalInitializerState::Done;
-                    Ok(Some(Terminal::new(x, y, pos)))
-                }
-                TerminalInitializerState::Done => Err(()),
-            },
-
-            _ => Ok(None),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,19 +278,5 @@ mod tests {
         assert_eq!(term.get_cursor(), Cursor::new(1, 0));
         assert_eq!(term.get_position(), Position::new(0, 0));
         assert_eq!(term.current_offset(), 0);
-    }
-
-    #[test]
-    fn initializer() {
-        let mut initializer = TerminalInitializer::new();
-
-        let terminal = "\x1b[2;3R\x1b[20;80R"
-            .as_bytes()
-            .iter()
-            .map(|&b| initializer.advance(b))
-            .find_map(|item| item.unwrap())
-            .unwrap();
-
-        assert_eq!(terminal, Terminal::new(20, 80, Cursor::new(1, 2)));
     }
 }
