@@ -1,6 +1,24 @@
 use core::{ops::Range, str::from_utf8_unchecked};
 
-use staticvec::StaticVec;
+pub struct StaticBuffer<const N: usize> {
+    array: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> StaticBuffer<N> {
+    pub fn new() -> Self {
+        Self {
+            array: [0; N],
+            len: 0,
+        }
+    }
+}
+
+impl<const N: usize> Default for StaticBuffer<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub trait Buffer: Default {
     fn buffer_len(&self) -> usize;
@@ -11,9 +29,9 @@ pub trait Buffer: Default {
     fn as_slice(&self) -> &[u8];
 }
 
-impl<const N: usize> Buffer for StaticVec<u8, N> {
+impl<const N: usize> Buffer for StaticBuffer<N> {
     fn buffer_len(&self) -> usize {
-        self.len()
+        self.len
     }
 
     fn capacity(&self) -> Option<usize> {
@@ -21,19 +39,32 @@ impl<const N: usize> Buffer for StaticVec<u8, N> {
     }
 
     fn truncate_buffer(&mut self, index: usize) {
-        self.truncate(index)
+        self.len = index;
     }
 
     fn insert_byte(&mut self, index: usize, byte: u8) {
-        self.insert(index, byte);
+        for i in (index..self.len).rev() {
+            self.array[i + 1] = self.array[i];
+        }
+
+        self.array[index] = byte;
+        self.len += 1;
     }
 
     fn remove_byte(&mut self, index: usize) -> u8 {
-        self.remove(index)
+        let byte = self.array[index];
+
+        for i in index..self.len {
+            self.array[i] = self.array[i + 1];
+        }
+
+        self.len -= 1;
+
+        byte
     }
 
     fn as_slice(&self) -> &[u8] {
-        self.as_slice()
+        &self.array[0..self.len]
     }
 }
 
@@ -171,7 +202,7 @@ impl<B: Buffer> LineBuffer<B> {
     }
 }
 
-pub type StaticLineBuffer<const N: usize> = LineBuffer<StaticVec<u8, N>>;
+pub type StaticLineBuffer<const N: usize> = LineBuffer<StaticBuffer<N>>;
 
 #[cfg(any(test, feature = "std"))]
 mod feature_std {

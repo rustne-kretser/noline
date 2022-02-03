@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 num_enum = "0.5.6"
-staticvec = "0.11.1"
 embedded-hal = {version = "0.2.6", optional = true}
 nb = {version = "1.0.0", optional = true}
 
