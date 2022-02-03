@@ -9,8 +9,10 @@ edition = "2021"
 num_enum = "0.5.6"
 embedded-hal = {version = "0.2.6", optional = true}
 nb = {version = "1.0.0", optional = true}
+tokio = {version = "1.16.1", optional = true, features = ["io-util", "sync"]}
 
 [features]
+default = ["std", "tokio", "embedded"]
 std = []
 embedded = ["embedded-hal", "nb"]
 
