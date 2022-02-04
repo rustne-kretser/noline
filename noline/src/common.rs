@@ -9,32 +9,6 @@ use crate::output::{Output, OutputAction};
 use crate::terminal::{Cursor, Terminal};
 
 use OutputAction::*;
-use Status::*;
-
-pub enum Status<'a, B: Buffer> {
-    Skip,
-    Continue(Output<'a, B>),
-    Done(Output<'a, B>),
-    Abort(Output<'a, B>),
-}
-
-impl<'a, B: Buffer> Status<'a, B> {
-    pub(crate) fn iter_bytes(&mut self) -> Option<&mut Output<'a, B>> {
-        match self {
-            Continue(iter) | Done(iter) | Abort(iter) => Some(iter),
-            Skip => None,
-        }
-    }
-
-    pub(crate) fn is_done(&self) -> Option<Result<(), ()>> {
-        match self {
-            Skip => None,
-            Continue(_) => None,
-            Done(_) => Some(Ok(())),
-            Abort(_) => Some(Err(())),
-        }
-    }
-}
 
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub(crate) enum NolineInitializerState {
@@ -112,35 +86,12 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
         }
     }
 
-    fn status_continue<'b>(&'b mut self, action: OutputAction) -> Status<'b, B> {
-        Status::Continue(Output::new(
-            self.prompt,
-            &*self.buffer,
-            &mut self.terminal,
-            action,
-        ))
+    fn output<'b>(&'b mut self, action: OutputAction) -> Output<'b, B> {
+        Output::new(self.prompt, &*self.buffer, &mut self.terminal, action)
     }
 
-    fn status_done<'b>(&'b mut self, action: OutputAction) -> Status<'b, B> {
-        Status::Done(Output::new(
-            self.prompt,
-            &*self.buffer,
-            &mut self.terminal,
-            action,
-        ))
-    }
-
-    fn status_abort<'b>(&'b mut self, action: OutputAction) -> Status<'b, B> {
-        Status::Abort(Output::new(
-            self.prompt,
-            &*self.buffer,
-            &mut self.terminal,
-            action,
-        ))
-    }
-
-    pub fn print_prompt<'b>(&'b mut self) -> Status<'b, B> {
-        self.status_continue(PrintPrompt)
+    pub fn print_prompt<'b>(&'b mut self) -> Output<'b, B> {
+        self.output(PrintPrompt)
     }
 
     fn current_position(&self) -> usize {
@@ -148,7 +99,7 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
         pos - self.prompt.len()
     }
 
-    pub(crate) fn input_byte<'b>(&'b mut self, byte: u8) -> Status<'b, B> {
+    pub(crate) fn input_byte<'b>(&'b mut self, byte: u8) -> Output<'b, B> {
         let action = self.parser.advance(byte);
 
         #[cfg(test)]
@@ -159,15 +110,15 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
                 let pos = self.current_position();
 
                 if self.buffer.insert_utf8_char(pos, c).is_ok() {
-                    self.status_continue(PrintBufferAndMoveCursorForward)
+                    self.output(PrintBufferAndMoveCursorForward)
                 } else {
-                    self.status_continue(RingBell)
+                    self.output(RingBell)
                 }
             }
             Action::ControlCharacter(c) => match c {
-                CtrlA => self.status_continue(MoveCursor(CursorMove::Start)),
-                CtrlB => self.status_continue(MoveCursor(CursorMove::Back)),
-                CtrlC => self.status_abort(PrintNewline),
+                CtrlA => self.output(MoveCursor(CursorMove::Start)),
+                CtrlB => self.output(MoveCursor(CursorMove::Back)),
+                CtrlC => self.output(Abort),
                 CtrlD => {
                     let len = self.buffer.len();
 
@@ -177,62 +128,62 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
                         if pos < len {
                             self.buffer.delete(pos);
 
-                            self.status_continue(EraseAndPrintBuffer)
+                            self.output(EraseAndPrintBuffer)
                         } else {
-                            self.status_continue(RingBell)
+                            self.output(RingBell)
                         }
                     } else {
-                        self.status_abort(PrintNewline)
+                        self.output(Abort)
                     }
                 }
-                CtrlE => self.status_continue(MoveCursor(CursorMove::End)),
-                CtrlF => self.status_continue(MoveCursor(CursorMove::Forward)),
+                CtrlE => self.output(MoveCursor(CursorMove::End)),
+                CtrlF => self.output(MoveCursor(CursorMove::Forward)),
                 CtrlK => {
                     let pos = self.current_position();
 
                     self.buffer.delete_after_char(pos);
 
-                    self.status_continue(EraseAfterCursor)
+                    self.output(EraseAfterCursor)
                 }
                 CtrlL => {
                     self.buffer.delete_after_char(0);
-                    self.status_continue(ClearScreen)
+                    self.output(ClearScreen)
                 }
                 CtrlT => {
                     let pos = self.current_position();
 
                     if pos > 0 && pos < self.buffer.as_str().chars().count() {
                         self.buffer.swap_chars(pos);
-                        self.status_continue(MoveCursorBackAndPrintBufferAndMoveForward)
+                        self.output(MoveCursorBackAndPrintBufferAndMoveForward)
                     } else {
-                        self.status_continue(RingBell)
+                        self.output(RingBell)
                     }
                 }
                 CtrlU => {
                     self.buffer.delete_after_char(0);
-                    self.status_continue(ClearLine)
+                    self.output(ClearLine)
                 }
                 CtrlW => {
                     let pos = self.current_position();
                     let move_cursor = -(self.buffer.delete_previous_word(pos) as isize);
-                    self.status_continue(MoveCursorAndEraseAndPrintBuffer(move_cursor))
+                    self.output(MoveCursorAndEraseAndPrintBuffer(move_cursor))
                 }
-                Enter => self.status_done(PrintNewline),
+                Enter => self.output(Done),
                 CtrlH | Backspace => {
                     let pos = self.current_position();
                     if pos > 0 {
                         self.buffer.delete(pos - 1);
-                        self.status_continue(MoveCursorAndEraseAndPrintBuffer(-1))
+                        self.output(MoveCursorAndEraseAndPrintBuffer(-1))
                     } else {
-                        self.status_continue(RingBell)
+                        self.output(RingBell)
                     }
                 }
-                _ => self.status_continue(RingBell),
+                _ => self.output(RingBell),
             },
             Action::ControlSequenceIntroducer(csi) => match csi {
-                CSI::CUF(_) => self.status_continue(MoveCursor(CursorMove::Forward)),
-                CSI::CUB(_) => self.status_continue(MoveCursor(CursorMove::Back)),
-                CSI::Home => self.status_continue(MoveCursor(CursorMove::Start)),
+                CSI::CUF(_) => self.output(MoveCursor(CursorMove::Forward)),
+                CSI::CUB(_) => self.output(MoveCursor(CursorMove::Back)),
+                CSI::Home => self.output(MoveCursor(CursorMove::Start)),
                 CSI::Delete => {
                     let len = self.buffer.len();
                     let pos = self.current_position();
@@ -240,25 +191,25 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
                     if pos < len {
                         self.buffer.delete(pos);
 
-                        self.status_continue(EraseAndPrintBuffer)
+                        self.output(EraseAndPrintBuffer)
                     } else {
-                        self.status_continue(RingBell)
+                        self.output(RingBell)
                     }
                 }
-                CSI::End => self.status_continue(MoveCursor(CursorMove::End)),
-                CSI::Unknown(_) => self.status_continue(RingBell),
-                CSI::CUU(_) => self.status_continue(RingBell),
-                CSI::CUD(_) => self.status_continue(RingBell),
-                CSI::CPR(_, _) => self.status_continue(RingBell),
-                CSI::CUP(_, _) => self.status_continue(RingBell),
-                CSI::ED(_) => self.status_continue(RingBell),
-                CSI::DSR => self.status_continue(RingBell),
-                CSI::SU(_) => self.status_continue(RingBell),
-                CSI::SD(_) => self.status_continue(RingBell),
+                CSI::End => self.output(MoveCursor(CursorMove::End)),
+                CSI::Unknown(_) => self.output(RingBell),
+                CSI::CUU(_) => self.output(RingBell),
+                CSI::CUD(_) => self.output(RingBell),
+                CSI::CPR(_, _) => self.output(RingBell),
+                CSI::CUP(_, _) => self.output(RingBell),
+                CSI::ED(_) => self.output(RingBell),
+                CSI::DSR => self.output(RingBell),
+                CSI::SU(_) => self.output(RingBell),
+                CSI::SD(_) => self.output(RingBell),
             },
-            Action::EscapeSequence(_) => self.status_continue(RingBell),
-            Action::Ignore => Status::Skip,
-            Action::InvalidUtf8 => self.status_continue(RingBell),
+            Action::EscapeSequence(_) => self.output(RingBell),
+            Action::Ignore => self.output(Nothing),
+            Action::InvalidUtf8 => self.output(RingBell),
         }
     }
 }

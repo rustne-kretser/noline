@@ -3,6 +3,7 @@ use crate::marker::Sync;
 
 use crate::common;
 use crate::common::NolineInitializerState;
+use crate::output::OutputItem;
 
 impl<'a, B: Buffer> common::NolineInitializer<'a, B, Sync> {
     pub fn initialize(
@@ -34,17 +35,21 @@ impl<'a, B: Buffer> common::Noline<'a, B, Sync> {
         input: u8,
         mut f: impl FnMut(&[u8]) -> Result<(), ()>,
     ) -> Option<Result<(), ()>> {
-        let mut status = self.input_byte(input);
-
-        if let Some(bytes) = status.iter_bytes() {
-            for bytes in bytes {
-                if f(bytes.as_bytes()).is_err() {
+        for item in self.input_byte(input) {
+            if let Some(bytes) = item.get_bytes() {
+                if f(bytes).is_err() {
                     return Some(Err(()));
                 }
             }
+
+            match item {
+                OutputItem::EndOfString => return Some(Ok(())),
+                OutputItem::Abort => return Some(Err(())),
+                _ => (),
+            }
         }
 
-        status.is_done()
+        None
     }
 }
 

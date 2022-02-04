@@ -3,6 +3,7 @@ use core::future::Future;
 use crate::common::{self, NolineInitializerState};
 use crate::line_buffer::Buffer;
 use crate::marker::Async;
+use crate::output::OutputItem;
 
 impl<'a, B: Buffer> common::NolineInitializer<'a, B, Async> {
     pub async fn initialize<IF, OF>(
@@ -38,17 +39,21 @@ impl<'a, B: Buffer> common::Noline<'a, B, Async> {
         input: u8,
         f: impl Fn(&[u8]) -> F,
     ) -> Option<Result<(), ()>> {
-        let mut status = self.input_byte(input);
-
-        if let Some(slices) = status.iter_bytes() {
-            for bytes in slices {
-                if f(bytes.as_bytes()).await.is_err() {
+        for item in self.input_byte(input) {
+            if let Some(bytes) = item.get_bytes() {
+                if f(bytes).await.is_err() {
                     return Some(Err(()));
                 }
             }
+
+            match item {
+                OutputItem::EndOfString => return Some(Ok(())),
+                OutputItem::Abort => return Some(Err(())),
+                _ => (),
+            }
         }
 
-        status.is_done()
+        None
     }
 }
 

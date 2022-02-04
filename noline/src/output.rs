@@ -5,16 +5,19 @@ use crate::{
     terminal::{Cursor, Position, Terminal},
 };
 
-pub enum Bytes<'a> {
+pub enum OutputItem<'a> {
     Slice(&'a [u8]),
     UintToBytes(UintToBytes<4>),
+    EndOfString,
+    Abort,
 }
 
-impl<'a> Bytes<'a> {
-    pub fn as_bytes(&self) -> &[u8] {
+impl<'a> OutputItem<'a> {
+    pub fn get_bytes(&self) -> Option<&[u8]> {
         match self {
-            Self::Slice(slice) => slice,
-            Self::UintToBytes(uint) => uint.as_bytes(),
+            Self::Slice(slice) => Some(slice),
+            Self::UintToBytes(uint) => Some(uint.as_bytes()),
+            Self::EndOfString | Self::Abort => None,
         }
     }
 }
@@ -31,6 +34,7 @@ pub enum CursorMove {
 #[cfg_attr(test, derive(Debug))]
 #[derive(Copy, Clone)]
 pub enum OutputAction {
+    Nothing,
     MoveCursor(CursorMove),
     PrintPrompt,
     PrintBufferAndMoveCursorForward,
@@ -42,6 +46,8 @@ pub enum OutputAction {
     MoveCursorAndEraseAndPrintBuffer(isize),
     RingBell,
     PrintNewline,
+    Done,
+    Abort,
 }
 
 #[cfg_attr(test, derive(Debug))]
@@ -110,26 +116,26 @@ impl MoveCursor {
 }
 
 impl Iterator for MoveCursor {
-    type Item = Bytes<'static>;
+    type Item = OutputItem<'static>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.state {
                 MoveCursorState::ScrollPrefix => {
                     self.state = MoveCursorState::Scroll;
-                    break Some(Bytes::Slice("\x1b[".as_bytes()));
+                    break Some(OutputItem::Slice("\x1b[".as_bytes()));
                 }
                 MoveCursorState::Scroll => {
                     self.state = MoveCursorState::ScrollFinalByte;
 
-                    break Some(Bytes::UintToBytes(
+                    break Some(OutputItem::UintToBytes(
                         UintToBytes::from_uint(self.scroll.abs() as usize).unwrap(),
                     ));
                 }
                 MoveCursorState::ScrollFinalByte => {
                     self.state = MoveCursorState::MovePrefix;
 
-                    break Some(Bytes::Slice(if self.scroll > 0 {
+                    break Some(OutputItem::Slice(if self.scroll > 0 {
                         "S".as_bytes()
                     } else {
                         "T".as_bytes()
@@ -145,28 +151,28 @@ impl Iterator for MoveCursor {
                 }
                 MoveCursorState::MovePrefix => {
                     self.state = MoveCursorState::Row;
-                    break Some(Bytes::Slice("\x1b[".as_bytes()));
+                    break Some(OutputItem::Slice("\x1b[".as_bytes()));
                 }
                 MoveCursorState::Row => {
                     self.state = MoveCursorState::Separator;
-                    break Some(Bytes::UintToBytes(
+                    break Some(OutputItem::UintToBytes(
                         UintToBytes::from_uint(self.cursor.row + 1).unwrap(),
                     ));
                 }
                 MoveCursorState::Separator => {
                     self.state = MoveCursorState::Column;
-                    break Some(Bytes::Slice(";".as_bytes()));
+                    break Some(OutputItem::Slice(";".as_bytes()));
                 }
                 MoveCursorState::Column => {
                     self.state = MoveCursorState::MoveFinalByte;
 
-                    break Some(Bytes::UintToBytes(
+                    break Some(OutputItem::UintToBytes(
                         UintToBytes::from_uint(self.cursor.column + 1).unwrap(),
                     ));
                 }
                 MoveCursorState::MoveFinalByte => {
                     self.state = MoveCursorState::Done;
-                    break Some(Bytes::Slice("H".as_bytes()));
+                    break Some(OutputItem::Slice("H".as_bytes()));
                 }
                 MoveCursorState::Done => break None,
             }
@@ -209,11 +215,13 @@ enum Step<'a> {
     Erase,
     Newline,
     Bell,
+    EndOfString,
+    Abort,
     Done,
 }
 
 impl<'a> Step<'a> {
-    fn advance(&mut self, terminal: &mut Terminal) -> Option<Bytes<'a>> {
+    fn advance(&mut self, terminal: &mut Terminal) -> Option<OutputItem<'a>> {
         match self {
             Print(s) => {
                 let columns_remaining = terminal.columns_remaining();
@@ -232,11 +240,11 @@ impl<'a> Step<'a> {
                     *self = Step::Done;
                 }
 
-                Some(Bytes::Slice(s.as_bytes()))
+                Some(OutputItem::Slice(s.as_bytes()))
             }
             NewlinePrint(s) => {
                 *self = Step::Print(s);
-                Some(Bytes::Slice("\n\r".as_bytes()))
+                Some(OutputItem::Slice("\n\r".as_bytes()))
             }
             Move(pos) => {
                 if let Some(move_cursor) = pos.get_move_cursor(terminal) {
@@ -250,15 +258,23 @@ impl<'a> Step<'a> {
             }
             Erase => {
                 *self = Step::Done;
-                Some(Bytes::Slice("\x1b[J".as_bytes()))
+                Some(OutputItem::Slice("\x1b[J".as_bytes()))
             }
             Newline => {
                 *self = Step::Done;
-                Some(Bytes::Slice("\n\r".as_bytes()))
+                Some(OutputItem::Slice("\n\r".as_bytes()))
             }
             Bell => {
                 *self = Step::Done;
-                Some(Bytes::Slice("\x07".as_bytes()))
+                Some(OutputItem::Slice("\x07".as_bytes()))
+            }
+            EndOfString => {
+                *self = Step::Done;
+                Some(OutputItem::EndOfString)
+            }
+            Abort => {
+                *self = Step::Done;
+                Some(OutputItem::Abort)
             }
             Done => None,
         }
@@ -347,13 +363,13 @@ impl<'a, B: Buffer> Output<'a, B> {
 }
 
 impl<'a, B: Buffer> Iterator for Output<'a, B> {
-    type Item = Bytes<'a>;
+    type Item = OutputItem<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn advance_steps<'a, const N: usize>(
             steps: &mut IntoIter<Step<'a>, N>,
             terminal: &mut Terminal,
-        ) -> Option<Bytes<'a>> {
+        ) -> Option<OutputItem<'a>> {
             loop {
                 if let Some((step, _)) = steps.as_mut_slice().split_first_mut() {
                     if let Some(bytes) = step.advance(terminal) {
@@ -470,6 +486,11 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                         OutputAction::PrintPrompt => {
                             OutputState::OneStep([Print(self.prompt)].into_iter())
                         }
+                        OutputAction::Done => {
+                            OutputState::TwoSteps([Newline, EndOfString].into_iter())
+                        }
+                        OutputAction::Abort => OutputState::TwoSteps([Newline, Abort].into_iter()),
+                        OutputAction::Nothing => OutputState::Done,
                     };
 
                     continue;
@@ -543,9 +564,15 @@ mod tests {
     fn move_cursor() {
         fn to_string(cm: MoveCursor) -> String {
             String::from_utf8(
-                cm.map(|bytes| bytes.as_bytes().iter().map(|&b| b).collect::<Vec<u8>>())
-                    .flatten()
-                    .collect(),
+                cm.map(|item| {
+                    if let Some(bytes) = item.get_bytes() {
+                        bytes.iter().map(|&b| b).collect::<Vec<u8>>()
+                    } else {
+                        vec![]
+                    }
+                })
+                .flatten()
+                .collect(),
             )
             .unwrap()
         }
@@ -591,9 +618,11 @@ mod tests {
         fn to_string(mut step: Step, terminal: &mut Terminal) -> String {
             let mut bytes = Vec::new();
 
-            while let Some(slice) = step.advance(terminal) {
-                for b in slice.as_bytes() {
-                    bytes.push(*b);
+            while let Some(item) = step.advance(terminal) {
+                if let Some(slice) = item.get_bytes() {
+                    for b in slice {
+                        bytes.push(*b);
+                    }
                 }
             }
 
@@ -637,7 +666,13 @@ mod tests {
         fn to_string<'a, B: Buffer>(output: Output<'a, B>) -> String {
             String::from_utf8(
                 output
-                    .map(|bytes| bytes.as_bytes().iter().map(|&b| b).collect::<Vec<u8>>())
+                    .map(|item| {
+                        if let Some(bytes) = item.get_bytes() {
+                            bytes.iter().map(|&b| b).collect::<Vec<u8>>()
+                        } else {
+                            vec![]
+                        }
+                    })
                     .flatten()
                     .collect(),
             )
