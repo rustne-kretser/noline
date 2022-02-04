@@ -108,10 +108,10 @@ pub mod embedded {
 
     fn write<W: Write<u8>>(tx: &mut W, buf: &[u8]) -> Result<(), ()> {
         for b in buf {
-            if block!(tx.write(*b)).is_err() {
-                return Err(());
-            }
+            block!(tx.write(*b)).or(Err(()))?;
         }
+
+        block!(tx.flush()).or(Err(()))?;
 
         Ok(())
     }
