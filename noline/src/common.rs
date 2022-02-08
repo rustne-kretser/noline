@@ -178,7 +178,7 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
                     let move_cursor = -(self.buffer.delete_previous_word(pos) as isize);
                     self.output(MoveCursorAndEraseAndPrintBuffer(move_cursor))
                 }
-                Enter => self.output(Done),
+                CarriageReturn => self.output(Done),
                 CtrlH | Backspace => {
                     let pos = self.current_position();
                     if pos > 0 {
@@ -407,8 +407,8 @@ mod tests {
                     dbg!(ctrl);
 
                     match ctrl {
-                        CtrlJ => self.cursor.column = 0,
-                        Enter => {
+                        CarriageReturn => self.cursor.column = 0,
+                        LineFeed => {
                             if self.cursor.row + 1 == self.rows {
                                 self.scroll_up(1);
                             } else {
