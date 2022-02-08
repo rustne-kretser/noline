@@ -1,30 +1,33 @@
 use core::future::Future;
 
-use crate::common::{self, NolineInitializerState};
+use crate::common;
+use crate::error::Error;
 use crate::line_buffer::Buffer;
 use crate::marker::Async;
 use crate::output::OutputItem;
 
 impl<'a, B: Buffer> common::NolineInitializer<'a, B, Async> {
-    pub async fn initialize<IF, OF>(
+    pub async fn initialize<IF, OF, E>(
         mut self,
         mut input: impl FnMut() -> IF,
         mut output: impl FnMut(&'a [u8]) -> OF,
-    ) -> Result<Noline<'a, B>, ()>
+    ) -> Result<Noline<'a, B>, Error<E>>
     where
-        IF: Future<Output = Result<u8, ()>>,
-        OF: Future<Output = Result<(), ()>>,
+        IF: Future<Output = Result<u8, E>>,
+        OF: Future<Output = Result<(), E>>,
     {
+        output(self.clear_line()).await?;
         output(self.prompt.as_bytes()).await?;
-        output(self.init_bytes()).await?;
+        output(self.probe_size()).await?;
 
         let terminal = loop {
-            if let NolineInitializerState::Done(terminal) = self.state {
-                break terminal;
-            }
-
             let byte = input().await?;
-            self.advance(byte)?;
+
+            match self.advance(byte) {
+                common::InitializerResult::Continue => (),
+                common::InitializerResult::Item(terminal) => break terminal,
+                common::InitializerResult::InvalidInput => return Err(Error::ParserError),
+            }
         };
 
         Ok(Noline::new(self.buffer, self.prompt, terminal))
@@ -34,21 +37,24 @@ impl<'a, B: Buffer> common::NolineInitializer<'a, B, Async> {
 pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Async>;
 
 impl<'a, B: Buffer> common::Noline<'a, B, Async> {
-    pub async fn advance<F: Future<Output = Result<(), ()>>>(
+    pub async fn advance<F, E>(
         &mut self,
         input: u8,
         f: impl Fn(&[u8]) -> F,
-    ) -> Option<Result<(), ()>> {
+    ) -> Option<Result<(), Error<E>>>
+    where
+        F: Future<Output = Result<(), Error<E>>>,
+    {
         for item in self.input_byte(input) {
             if let Some(bytes) = item.get_bytes() {
-                if f(bytes).await.is_err() {
-                    return Some(Err(()));
+                if let Err(err) = f(bytes).await {
+                    return Some(Err(err));
                 }
             }
 
             match item {
                 OutputItem::EndOfString => return Some(Ok(())),
-                OutputItem::Abort => return Some(Err(())),
+                OutputItem::Abort => return Some(Err(Error::Aborted)),
                 _ => (),
             }
         }
@@ -80,30 +86,27 @@ pub mod with_tokio {
         prompt: &'a str,
         stdin: Arc<Mutex<R>>,
         stdout: Arc<Mutex<W>>,
-    ) -> Result<&'a str, ()> {
+    ) -> Result<&'a str, Error<std::io::Error>> {
         let mut noline = NolineInitializer::new(buffer, prompt)
             .initialize(
                 || async {
-                    if let Ok(b) = stdin.lock().await.read_u8().await {
-                        Ok(b)
-                    } else {
-                        Err(())
-                    }
+                    let b = stdin.lock().await.read_u8().await?;
+
+                    Ok(b)
                 },
                 |bytes| async {
-                    if stdout.lock().await.write_all(bytes).await.is_ok() {
-                        stdout.lock().await.flush().await.or(Err(()))?;
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
+                    stdout.lock().await.write_all(bytes).await?;
+                    stdout.lock().await.flush().await?;
+                    Ok(())
                 },
             )
             .await?;
 
-        stdout.lock().await.flush().await.or(Err(()))?;
+        stdout.lock().await.flush().await?;
 
-        while let Ok(b) = stdin.lock().await.read_u8().await {
+        loop {
+            let b = stdin.lock().await.read_u8().await?;
+
             match noline
                 .advance(b, |output| {
                     // I know copying bytes to a vec isn't is bad, but
@@ -114,34 +117,21 @@ pub mod with_tokio {
 
                     let stdout = stdout.clone();
                     async move {
-                        if stdout
-                            .lock()
-                            .await
-                            .write_all(output.as_slice())
-                            .await
-                            .is_ok()
-                        {
-                            Ok(())
-                        } else {
-                            Err(())
-                        }
+                        stdout.lock().await.write_all(output.as_slice()).await?;
+                        Ok(())
                     }
                 })
                 .await
             {
                 Some(rc) => {
-                    if rc.is_ok() {
-                        return Ok(noline.buffer.as_str());
-                    } else {
-                        return Err(());
-                    }
+                    rc?;
+
+                    break Ok(noline.buffer.as_str());
                 }
                 None => (),
             }
 
-            stdout.lock().await.flush().await.or(Err(()))?;
+            stdout.lock().await.flush().await?;
         }
-
-        Err(())
     }
 }

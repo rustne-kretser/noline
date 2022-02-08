@@ -10,11 +10,17 @@ use crate::terminal::{Cursor, Terminal};
 
 use OutputAction::*;
 
+pub enum InitializerResult<T> {
+    Continue,
+    Item(T),
+    InvalidInput,
+}
+
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub(crate) enum NolineInitializerState {
     New,
     Position(Cursor),
-    Done(Terminal),
+    Done,
 }
 
 pub struct NolineInitializer<'a, B: Buffer, S: SyncAsync> {
@@ -36,11 +42,15 @@ impl<'a, B: Buffer, S: SyncAsync> NolineInitializer<'a, B, S> {
         }
     }
 
-    pub(crate) fn init_bytes(&self) -> &'static [u8] {
-        "\x1b[6n\x1b7\x1b[999;999H\x1b[6n\x1b8".as_bytes()
+    pub(crate) fn clear_line(&self) -> &'static [u8] {
+        "\r\x1b[J".as_bytes()
     }
 
-    pub(crate) fn advance(&mut self, byte: u8) -> Result<(), ()> {
+    pub(crate) fn probe_size(&self) -> &'static [u8] {
+        "\x1b7\x1b[6n\x1b[999;999H\x1b[6n\x1b8".as_bytes()
+    }
+
+    pub(crate) fn advance(&mut self, byte: u8) -> InitializerResult<Terminal> {
         let action = self.parser.advance(byte);
 
         #[cfg(test)]
@@ -50,19 +60,19 @@ impl<'a, B: Buffer, S: SyncAsync> NolineInitializer<'a, B, S> {
             Action::ControlSequenceIntroducer(CSI::CPR(x, y)) => match self.state {
                 NolineInitializerState::New => {
                     self.state = NolineInitializerState::Position(Cursor::new(x - 1, y - 1));
-                    Ok(())
+                    InitializerResult::Continue
                 }
                 NolineInitializerState::Position(pos) => {
                     #[cfg(test)]
                     dbg!(pos, x, y);
 
-                    self.state = NolineInitializerState::Done(Terminal::new(x, y, pos));
-                    Ok(())
+                    self.state = NolineInitializerState::Done;
+                    InitializerResult::Item(Terminal::new(x, y, pos))
                 }
-                NolineInitializerState::Done(_) => Err(()),
+                NolineInitializerState::Done => InitializerResult::InvalidInput,
             },
-            Action::Ignore => Ok(()),
-            _ => Err(()),
+            Action::Ignore => InitializerResult::Continue,
+            _ => InitializerResult::InvalidInput,
         }
     }
 }
@@ -223,6 +233,7 @@ mod tests {
 
     use std::boxed::Box;
 
+    use crate::error::Error;
     use crate::input::tests::AsByteVec;
     use crate::line_buffer::AllocLineBuffer;
     use crate::sync::{Noline, NolineInitializer};
@@ -268,7 +279,7 @@ mod tests {
                         if let Ok(b) = rx.try_recv() {
                             Ok(b)
                         } else {
-                            Err(())
+                            Err(Error::IoError(()))
                         }
                     },
                     |bytes| {
@@ -425,12 +436,12 @@ mod tests {
             None
         }
 
-        fn advance(&mut self, input: impl AsByteVec) -> Result<(), ()> {
+        fn advance(&mut self, input: impl AsByteVec) -> core::result::Result<(), ()> {
             self.bell = false;
             let mut noline = self.noline.take().unwrap();
 
             for input in input.as_byte_vec() {
-                noline.advance(input, |bytes| {
+                noline.advance::<_, ()>(input, |bytes| {
                     for output in bytes {
                         self.handle_input(*output);
                     }

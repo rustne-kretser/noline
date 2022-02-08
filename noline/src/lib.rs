@@ -5,6 +5,7 @@
 extern crate std;
 
 mod common;
+pub mod error;
 mod input;
 pub mod line_buffer;
 mod marker;
