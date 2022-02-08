@@ -17,5 +17,3 @@ std = []
 embedded = ["embedded-hal", "nb"]
 
 [dev-dependencies]
-embedded-hal = "0.2.6"
-nb = "1.0.0"
