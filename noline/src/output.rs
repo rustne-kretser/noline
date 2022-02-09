@@ -36,7 +36,7 @@ pub enum CursorMove {
 pub enum OutputAction {
     Nothing,
     MoveCursor(CursorMove),
-    PrintPrompt,
+    ClearAndPrintPrompt,
     PrintBufferAndMoveCursorForward,
     EraseAfterCursor,
     EraseAndPrintBuffer,
@@ -212,6 +212,7 @@ enum Step<'a> {
     Print(&'a str),
     NewlinePrint(&'a str),
     Move(MoveCursorToPosition),
+    ClearLine,
     Erase,
     Newline,
     Bell,
@@ -221,6 +222,15 @@ enum Step<'a> {
 }
 
 impl<'a> Step<'a> {
+    fn transition(
+        &mut self,
+        new_state: Step<'a>,
+        output: OutputItem<'a>,
+    ) -> Option<OutputItem<'a>> {
+        *self = new_state;
+        Some(output)
+    }
+
     fn advance(&mut self, terminal: &mut Terminal) -> Option<OutputItem<'a>> {
         match self {
             Print(s) => {
@@ -231,20 +241,20 @@ impl<'a> Step<'a> {
                 #[cfg(test)]
                 dbg!(s, rest);
 
-                let position = terminal.relative_position(s.len() as isize);
+                let position = terminal.relative_position(s.chars().count() as isize);
                 terminal.move_cursor(position);
 
-                if s.len() == columns_remaining {
-                    *self = Step::NewlinePrint(rest);
+                let step = if s.len() == columns_remaining {
+                    Step::NewlinePrint(rest)
                 } else {
-                    *self = Step::Done;
-                }
+                    Step::Done
+                };
 
-                Some(OutputItem::Slice(s.as_bytes()))
+                self.transition(step, OutputItem::Slice(s.as_bytes()))
             }
             NewlinePrint(s) => {
-                *self = Step::Print(s);
-                Some(OutputItem::Slice("\n\r".as_bytes()))
+                let step = Step::Print(s);
+                self.transition(step, OutputItem::Slice("\n\r".as_bytes()))
             }
             Move(pos) => {
                 if let Some(move_cursor) = pos.get_move_cursor(terminal) {
@@ -256,25 +266,15 @@ impl<'a> Step<'a> {
                 *self = Step::Done;
                 None
             }
-            Erase => {
-                *self = Step::Done;
-                Some(OutputItem::Slice("\x1b[J".as_bytes()))
-            }
-            Newline => {
-                *self = Step::Done;
-                Some(OutputItem::Slice("\n\r".as_bytes()))
-            }
-            Bell => {
-                *self = Step::Done;
-                Some(OutputItem::Slice("\x07".as_bytes()))
-            }
-            EndOfString => {
-                *self = Step::Done;
-                Some(OutputItem::EndOfString)
-            }
-            Abort => {
-                *self = Step::Done;
-                Some(OutputItem::Abort)
+            Erase => self.transition(Step::Done, OutputItem::Slice("\x1b[J".as_bytes())),
+            Newline => self.transition(Step::Done, OutputItem::Slice("\n\r".as_bytes())),
+            Bell => self.transition(Step::Done, OutputItem::Slice("\x07".as_bytes())),
+            EndOfString => self.transition(Step::Done, OutputItem::EndOfString),
+            Abort => self.transition(Step::Done, OutputItem::Abort),
+            ClearLine => {
+                terminal.move_cursor_to_start_of_line();
+
+                self.transition(Step::Done, OutputItem::Slice("\r\x1b[J".as_bytes()))
             }
             Done => None,
         }
@@ -483,8 +483,8 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                         }
                         OutputAction::RingBell => OutputState::OneStep([Bell].into_iter()),
                         OutputAction::PrintNewline => OutputState::OneStep([Newline].into_iter()),
-                        OutputAction::PrintPrompt => {
-                            OutputState::OneStep([Print(self.prompt)].into_iter())
+                        OutputAction::ClearAndPrintPrompt => {
+                            OutputState::TwoSteps([ClearLine, Print(self.prompt)].into_iter())
                         }
                         OutputAction::Done => {
                             OutputState::TwoSteps([Newline, EndOfString].into_iter())
@@ -687,10 +687,10 @@ mod tests {
             prompt,
             &line_buffer,
             &mut terminal,
-            OutputAction::PrintPrompt,
+            OutputAction::ClearAndPrintPrompt,
         ));
 
-        assert_eq!(result, "> ");
+        assert_eq!(result, "\r\x1b[J> ");
 
         line_buffer.insert_str(0, "Hello, world!");
 

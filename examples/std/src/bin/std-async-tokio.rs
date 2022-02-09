@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use noline::{line_buffer::AllocLineBuffer, no_sync::with_tokio::readline};
+use noline::no_sync::with_tokio::Editor;
 use termion::raw::IntoRawMode;
 use tokio::{
     io::{self, AsyncWriteExt},
@@ -15,10 +15,12 @@ async fn main() {
 
     let prompt = "> ";
 
-    loop {
-        let mut buffer = AllocLineBuffer::new();
+    let mut editor = Editor::<Vec<u8>>::new(prompt, stdin.clone(), stdout.clone())
+        .await
+        .unwrap();
 
-        if let Ok(line) = readline(&mut buffer, prompt, stdin.clone(), stdout.clone()).await {
+    loop {
+        if let Ok(line) = editor.readline(stdin.clone(), stdout.clone()).await {
             let s = format!("Read: '{}'\n\r", line);
             stdout.lock().await.write_all(s.as_bytes()).await.unwrap();
         } else {

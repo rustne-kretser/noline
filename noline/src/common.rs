@@ -26,17 +26,15 @@ pub(crate) enum NolineInitializerState {
 pub struct NolineInitializer<'a, B: Buffer, S: SyncAsync> {
     pub(crate) state: NolineInitializerState,
     parser: Parser,
-    pub(crate) buffer: &'a mut LineBuffer<B>,
     pub(crate) prompt: &'a str,
-    _marker: PhantomData<S>,
+    _marker: PhantomData<(S, B)>,
 }
 
 impl<'a, B: Buffer, S: SyncAsync> NolineInitializer<'a, B, S> {
-    pub fn new(buffer: &'a mut LineBuffer<B>, prompt: &'a str) -> Self {
+    pub fn new(prompt: &'a str) -> Self {
         Self {
             state: NolineInitializerState::New,
             parser: Parser::new(),
-            buffer,
             prompt,
             _marker: PhantomData,
         }
@@ -78,7 +76,7 @@ impl<'a, B: Buffer, S: SyncAsync> NolineInitializer<'a, B, S> {
 }
 
 pub struct Noline<'a, B: Buffer, S: SyncAsync> {
-    pub(crate) buffer: &'a mut LineBuffer<B>,
+    pub(crate) buffer: LineBuffer<B>,
     terminal: Terminal,
     parser: Parser,
     prompt: &'a str,
@@ -86,9 +84,9 @@ pub struct Noline<'a, B: Buffer, S: SyncAsync> {
 }
 
 impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
-    pub fn new(line_buffer: &'a mut LineBuffer<B>, prompt: &'a str, terminal: Terminal) -> Self {
+    pub fn new(prompt: &'a str, terminal: Terminal) -> Self {
         Self {
-            buffer: line_buffer,
+            buffer: LineBuffer::new(),
             terminal,
             parser: Parser::new(),
             prompt,
@@ -96,12 +94,13 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
         }
     }
 
-    fn output<'b>(&'b mut self, action: OutputAction) -> Output<'b, B> {
-        Output::new(self.prompt, &*self.buffer, &mut self.terminal, action)
+    pub fn reset_line<'b>(&'b mut self) -> Output<'b, B> {
+        self.buffer.truncate();
+        self.generate_output(ClearAndPrintPrompt)
     }
 
-    pub fn print_prompt<'b>(&'b mut self) -> Output<'b, B> {
-        self.output(PrintPrompt)
+    fn generate_output<'b>(&'b mut self, action: OutputAction) -> Output<'b, B> {
+        Output::new(self.prompt, &mut self.buffer, &mut self.terminal, action)
     }
 
     fn current_position(&self) -> usize {
@@ -120,15 +119,15 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
                 let pos = self.current_position();
 
                 if self.buffer.insert_utf8_char(pos, c).is_ok() {
-                    self.output(PrintBufferAndMoveCursorForward)
+                    self.generate_output(PrintBufferAndMoveCursorForward)
                 } else {
-                    self.output(RingBell)
+                    self.generate_output(RingBell)
                 }
             }
             Action::ControlCharacter(c) => match c {
-                CtrlA => self.output(MoveCursor(CursorMove::Start)),
-                CtrlB => self.output(MoveCursor(CursorMove::Back)),
-                CtrlC => self.output(Abort),
+                CtrlA => self.generate_output(MoveCursor(CursorMove::Start)),
+                CtrlB => self.generate_output(MoveCursor(CursorMove::Back)),
+                CtrlC => self.generate_output(Abort),
                 CtrlD => {
                     let len = self.buffer.len();
 
@@ -138,62 +137,62 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
                         if pos < len {
                             self.buffer.delete(pos);
 
-                            self.output(EraseAndPrintBuffer)
+                            self.generate_output(EraseAndPrintBuffer)
                         } else {
-                            self.output(RingBell)
+                            self.generate_output(RingBell)
                         }
                     } else {
-                        self.output(Abort)
+                        self.generate_output(Abort)
                     }
                 }
-                CtrlE => self.output(MoveCursor(CursorMove::End)),
-                CtrlF => self.output(MoveCursor(CursorMove::Forward)),
+                CtrlE => self.generate_output(MoveCursor(CursorMove::End)),
+                CtrlF => self.generate_output(MoveCursor(CursorMove::Forward)),
                 CtrlK => {
                     let pos = self.current_position();
 
                     self.buffer.delete_after_char(pos);
 
-                    self.output(EraseAfterCursor)
+                    self.generate_output(EraseAfterCursor)
                 }
                 CtrlL => {
                     self.buffer.delete_after_char(0);
-                    self.output(ClearScreen)
+                    self.generate_output(ClearScreen)
                 }
                 CtrlT => {
                     let pos = self.current_position();
 
                     if pos > 0 && pos < self.buffer.as_str().chars().count() {
                         self.buffer.swap_chars(pos);
-                        self.output(MoveCursorBackAndPrintBufferAndMoveForward)
+                        self.generate_output(MoveCursorBackAndPrintBufferAndMoveForward)
                     } else {
-                        self.output(RingBell)
+                        self.generate_output(RingBell)
                     }
                 }
                 CtrlU => {
                     self.buffer.delete_after_char(0);
-                    self.output(ClearLine)
+                    self.generate_output(ClearLine)
                 }
                 CtrlW => {
                     let pos = self.current_position();
                     let move_cursor = -(self.buffer.delete_previous_word(pos) as isize);
-                    self.output(MoveCursorAndEraseAndPrintBuffer(move_cursor))
+                    self.generate_output(MoveCursorAndEraseAndPrintBuffer(move_cursor))
                 }
-                CarriageReturn => self.output(Done),
+                CarriageReturn => self.generate_output(Done),
                 CtrlH | Backspace => {
                     let pos = self.current_position();
                     if pos > 0 {
                         self.buffer.delete(pos - 1);
-                        self.output(MoveCursorAndEraseAndPrintBuffer(-1))
+                        self.generate_output(MoveCursorAndEraseAndPrintBuffer(-1))
                     } else {
-                        self.output(RingBell)
+                        self.generate_output(RingBell)
                     }
                 }
-                _ => self.output(RingBell),
+                _ => self.generate_output(RingBell),
             },
             Action::ControlSequenceIntroducer(csi) => match csi {
-                CSI::CUF(_) => self.output(MoveCursor(CursorMove::Forward)),
-                CSI::CUB(_) => self.output(MoveCursor(CursorMove::Back)),
-                CSI::Home => self.output(MoveCursor(CursorMove::Start)),
+                CSI::CUF(_) => self.generate_output(MoveCursor(CursorMove::Forward)),
+                CSI::CUB(_) => self.generate_output(MoveCursor(CursorMove::Back)),
+                CSI::Home => self.generate_output(MoveCursor(CursorMove::Start)),
                 CSI::Delete => {
                     let len = self.buffer.len();
                     let pos = self.current_position();
@@ -201,25 +200,25 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
                     if pos < len {
                         self.buffer.delete(pos);
 
-                        self.output(EraseAndPrintBuffer)
+                        self.generate_output(EraseAndPrintBuffer)
                     } else {
-                        self.output(RingBell)
+                        self.generate_output(RingBell)
                     }
                 }
-                CSI::End => self.output(MoveCursor(CursorMove::End)),
-                CSI::Unknown(_) => self.output(RingBell),
-                CSI::CUU(_) => self.output(RingBell),
-                CSI::CUD(_) => self.output(RingBell),
-                CSI::CPR(_, _) => self.output(RingBell),
-                CSI::CUP(_, _) => self.output(RingBell),
-                CSI::ED(_) => self.output(RingBell),
-                CSI::DSR => self.output(RingBell),
-                CSI::SU(_) => self.output(RingBell),
-                CSI::SD(_) => self.output(RingBell),
+                CSI::End => self.generate_output(MoveCursor(CursorMove::End)),
+                CSI::Unknown(_) => self.generate_output(RingBell),
+                CSI::CUU(_) => self.generate_output(RingBell),
+                CSI::CUD(_) => self.generate_output(RingBell),
+                CSI::CPR(_, _) => self.generate_output(RingBell),
+                CSI::CUP(_, _) => self.generate_output(RingBell),
+                CSI::ED(_) => self.generate_output(RingBell),
+                CSI::DSR => self.generate_output(RingBell),
+                CSI::SU(_) => self.generate_output(RingBell),
+                CSI::SD(_) => self.generate_output(RingBell),
             },
-            Action::EscapeSequence(_) => self.output(RingBell),
-            Action::Ignore => self.output(Nothing),
-            Action::InvalidUtf8 => self.output(RingBell),
+            Action::EscapeSequence(_) => self.generate_output(RingBell),
+            Action::Ignore => self.generate_output(Nothing),
+            Action::InvalidUtf8 => self.generate_output(RingBell),
         }
     }
 }
@@ -231,11 +230,8 @@ mod tests {
 
     use std::string::String;
 
-    use std::boxed::Box;
-
     use crate::error::Error;
     use crate::input::tests::AsByteVec;
-    use crate::line_buffer::AllocLineBuffer;
     use crate::sync::{Noline, NolineInitializer};
     use crate::terminal::Cursor;
 
@@ -253,13 +249,7 @@ mod tests {
     }
 
     impl<'a, B: Buffer> MockTerminal<'a, B> {
-        fn new(
-            buffer: &'a mut LineBuffer<B>,
-            prompt: &'a str,
-            rows: usize,
-            columns: usize,
-            origin: Cursor,
-        ) -> Self {
+        fn new(prompt: &'a str, rows: usize, columns: usize, origin: Cursor) -> Self {
             let mut term = Self {
                 noline: None, // Some(noline),
                 parser: Parser::new(),
@@ -273,7 +263,7 @@ mod tests {
 
             let (tx, rx) = channel();
 
-            let noline = NolineInitializer::new(buffer, prompt)
+            let noline = NolineInitializer::new(prompt)
                 .initialize(
                     || {
                         if let Ok(b) = rx.try_recv() {
@@ -479,8 +469,7 @@ mod tests {
         columns: usize,
         origin: Cursor,
     ) -> MockTerminal<'a, Vec<u8>> {
-        let buffer = Box::leak(Box::new(AllocLineBuffer::new()));
-        let terminal = MockTerminal::new(buffer, prompt, rows, columns, origin);
+        let terminal = MockTerminal::new(prompt, rows, columns, origin);
 
         assert_eq!(terminal.get_cursor(), Cursor::new(origin.row, 2));
         assert_eq!(terminal.screen_as_string(), prompt);

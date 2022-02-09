@@ -131,6 +131,10 @@ impl<B: Buffer> LineBuffer<B> {
         self.buf.truncate_buffer(pos);
     }
 
+    pub fn truncate(&mut self) {
+        self.delete_after_char(0);
+    }
+
     fn delete_range(&mut self, range: Range<usize>) {
         let pos = range.start;
         for _ in range {

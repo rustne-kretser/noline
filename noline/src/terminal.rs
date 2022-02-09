@@ -95,6 +95,10 @@ impl Terminal {
         rows
     }
 
+    pub fn move_cursor_to_start_of_line(&mut self) {
+        self.cursor.column = 0;
+    }
+
     pub fn position_to_cursor(&self, position: Position) -> Option<Cursor> {
         let row = position.row as isize - self.row_offset;
 

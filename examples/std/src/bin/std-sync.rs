@@ -1,18 +1,16 @@
-use noline::sync::with_std::readline;
+use noline::sync::with_std::Editor;
 use std::io::{self, Write};
 use termion::raw::IntoRawMode;
-
-use noline::line_buffer::AllocLineBuffer;
 
 fn main() {
     let mut stdin = io::stdin();
     let mut stdout = io::stdout().into_raw_mode().unwrap();
     let prompt = "> ";
 
-    loop {
-        let mut buffer = AllocLineBuffer::new();
+    let mut editor = Editor::<Vec<u8>>::new(prompt, &mut stdin, &mut stdout).unwrap();
 
-        if let Ok(line) = readline(&mut buffer, prompt, &mut stdin, &mut stdout) {
+    loop {
+        if let Ok(line) = editor.readline(&mut stdin, &mut stdout) {
             write!(stdout, "Read: '{}'\n\r", line).unwrap();
         } else {
             break;

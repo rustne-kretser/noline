@@ -30,7 +30,7 @@ impl<'a, B: Buffer> common::NolineInitializer<'a, B, Async> {
             }
         };
 
-        Ok(Noline::new(self.buffer, self.prompt, terminal))
+        Ok(Noline::new(self.prompt, terminal))
     }
 }
 
@@ -67,8 +67,6 @@ type Noline<'a, B> = common::Noline<'a, B, Async>;
 
 #[cfg(feature = "tokio")]
 pub mod with_tokio {
-    use crate::line_buffer::LineBuffer;
-
     use super::*;
 
     use std::sync::Arc;
@@ -78,60 +76,81 @@ pub mod with_tokio {
         sync::Mutex,
     };
 
-    // I thought I had a pretty good handle on lifetimes, but async
-    // lifetimes are something else. The Arc-Mutexes aren't my first
-    // choice, but they make the borrow checker happy.
-    pub async fn readline<'a, B: Buffer, W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
-        buffer: &'a mut LineBuffer<B>,
-        prompt: &'a str,
-        stdin: Arc<Mutex<R>>,
-        stdout: Arc<Mutex<W>>,
-    ) -> Result<&'a str, Error<std::io::Error>> {
-        let mut noline = NolineInitializer::new(buffer, prompt)
-            .initialize(
-                || async {
-                    let b = stdin.lock().await.read_u8().await?;
+    pub struct Editor<'a, B>
+    where
+        B: Buffer,
+    {
+        noline: Noline<'a, B>,
+    }
 
-                    Ok(b)
-                },
-                |bytes| async {
-                    stdout.lock().await.write_all(bytes).await?;
-                    stdout.lock().await.flush().await?;
-                    Ok(())
-                },
-            )
-            .await?;
+    impl<'a, B> Editor<'a, B>
+    where
+        B: Buffer,
+    {
+        // I thought I had a pretty good handle on lifetimes, but async
+        // lifetimes are something else. The Arc-Mutexes aren't my first
+        // choice, but they make the borrow checker happy.
 
-        stdout.lock().await.flush().await?;
+        pub async fn new<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
+            prompt: &'a str,
+            stdin: Arc<Mutex<R>>,
+            stdout: Arc<Mutex<W>>,
+        ) -> Result<Editor<'a, B>, Error<std::io::Error>> {
+            let noline = NolineInitializer::new(prompt)
+                .initialize(
+                    || async {
+                        let b = stdin.lock().await.read_u8().await?;
 
-        loop {
-            let b = stdin.lock().await.read_u8().await?;
-
-            match noline
-                .advance(b, |output| {
-                    // I know copying bytes to a vec isn't is bad, but
-                    // after fighting lifetime issues with async
-                    // closures just for the better part of an
-                    // afternoon I just don't care anymore.
-                    let output: Vec<u8> = output.iter().map(|&b| b).collect();
-
-                    let stdout = stdout.clone();
-                    async move {
-                        stdout.lock().await.write_all(output.as_slice()).await?;
+                        Ok(b)
+                    },
+                    |bytes| async {
+                        stdout.lock().await.write_all(bytes).await?;
+                        stdout.lock().await.flush().await?;
                         Ok(())
-                    }
-                })
-                .await
-            {
-                Some(rc) => {
-                    rc?;
-
-                    break Ok(noline.buffer.as_str());
-                }
-                None => (),
-            }
+                    },
+                )
+                .await?;
 
             stdout.lock().await.flush().await?;
+
+            Ok(Self { noline })
+        }
+
+        pub async fn readline<'b, W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
+            &'b mut self,
+            stdin: Arc<Mutex<R>>,
+            stdout: Arc<Mutex<W>>,
+        ) -> Result<&'b str, Error<std::io::Error>> {
+            loop {
+                let b = stdin.lock().await.read_u8().await?;
+
+                match self
+                    .noline
+                    .advance(b, |output| {
+                        // I know copying bytes to a vec isn't is bad, but
+                        // after fighting lifetime issues with async
+                        // closures just for the better part of an
+                        // afternoon I just don't care anymore.
+                        let output: Vec<u8> = output.iter().map(|&b| b).collect();
+
+                        let stdout = stdout.clone();
+                        async move {
+                            stdout.lock().await.write_all(output.as_slice()).await?;
+                            Ok(())
+                        }
+                    })
+                    .await
+                {
+                    Some(rc) => {
+                        rc?;
+
+                        break Ok(self.noline.buffer.as_str());
+                    }
+                    None => (),
+                }
+
+                stdout.lock().await.flush().await?;
+            }
         }
     }
 }

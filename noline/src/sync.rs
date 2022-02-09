@@ -3,7 +3,7 @@ use crate::line_buffer::Buffer;
 use crate::marker::Sync;
 
 use crate::common;
-use crate::output::OutputItem;
+use crate::output::{Output, OutputItem};
 
 impl<'a, B: Buffer> common::NolineInitializer<'a, B, Sync> {
     pub fn initialize<E>(
@@ -25,18 +25,18 @@ impl<'a, B: Buffer> common::NolineInitializer<'a, B, Sync> {
             }
         };
 
-        Ok(Noline::new(self.buffer, self.prompt, terminal))
+        Ok(Noline::new(self.prompt, terminal))
     }
 }
 
 pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Sync>;
 
 impl<'a, B: Buffer> common::Noline<'a, B, Sync> {
-    pub fn advance<'b, F, E>(&'b mut self, input: u8, mut f: F) -> Option<Result<(), Error<E>>>
+    pub fn handle_ouput<'b, F, E>(output: Output<'b, B>, mut f: F) -> Option<Result<(), Error<E>>>
     where
         F: FnMut(&[u8]) -> Result<(), Error<E>>,
     {
-        for item in self.input_byte(input) {
+        for item in output {
             if let Some(bytes) = item.get_bytes() {
                 if let Err(err) = f(bytes) {
                     return Some(Err(err));
@@ -52,6 +52,24 @@ impl<'a, B: Buffer> common::Noline<'a, B, Sync> {
 
         None
     }
+
+    pub fn advance<'b, F, E>(&'b mut self, input: u8, f: F) -> Option<Result<(), Error<E>>>
+    where
+        F: FnMut(&[u8]) -> Result<(), Error<E>>,
+    {
+        Self::handle_ouput(self.input_byte(input), f)
+    }
+
+    pub fn reset<'b, F, E>(&'b mut self, f: F) -> Result<(), Error<E>>
+    where
+        F: FnMut(&[u8]) -> Result<(), Error<E>>,
+    {
+        if let Some(res) = Self::handle_ouput(self.reset_line(), f) {
+            res?;
+        }
+
+        Ok(())
+    }
 }
 
 pub type Noline<'a, B> = common::Noline<'a, B, Sync>;
@@ -59,56 +77,66 @@ pub type Noline<'a, B> = common::Noline<'a, B, Sync>;
 #[cfg(any(test, feature = "std"))]
 pub mod with_std {
     use super::*;
-    use crate::line_buffer::LineBuffer;
     use std::io::Read;
     use std::io::Write;
 
-    pub fn readline<'a, B, W, R>(
-        buffer: &'a mut LineBuffer<B>,
-        prompt: &'a str,
-        stdin: &mut R,
-        stdout: &mut W,
-    ) -> Result<&'a str, Error<std::io::Error>>
+    pub struct Editor<'a, B>
     where
         B: Buffer,
-        W: Write,
-        R: Read,
     {
-        let mut noline = NolineInitializer::new(buffer, prompt).initialize(
-            || {
-                // let b = stdin.bytes().next()?;
+        noline: Noline<'a, B>,
+    }
 
-                if let Some(b) = stdin.bytes().next() {
-                    let b = b?;
+    fn output_closure<'b, W: Write>(
+        stdout: &'b mut W,
+    ) -> impl FnMut(&[u8]) -> Result<(), Error<std::io::Error>> + 'b {
+        |bytes| {
+            stdout.write_all(bytes)?;
+            stdout.flush()?;
+            Ok(())
+        }
+    }
+
+    impl<'a, B> Editor<'a, B>
+    where
+        B: Buffer,
+    {
+        pub fn new<W: Write, R: Read>(
+            prompt: &'a str,
+            stdin: &mut R,
+            stdout: &mut W,
+        ) -> Result<Self, Error<std::io::Error>> {
+            let noline = NolineInitializer::new(prompt).initialize(
+                || {
+                    let b = stdin.bytes().next().unwrap_or_else(|| unreachable!())?;
                     Ok(b)
-                } else {
-                    Err(Error::EOF)
-                }
-            },
-            |bytes| {
-                stdout.write_all(bytes)?;
-                stdout.flush()?;
-                Ok(())
-            },
-        )?;
+                },
+                output_closure(stdout),
+            )?;
 
-        for i in stdin.bytes() {
-            if let Ok(byte) = i {
-                match noline.advance(byte, |output| {
-                    stdout.write(output)?;
-                    Ok(())
-                }) {
+            Ok(Self { noline })
+        }
+
+        pub fn readline<'b, W: Write, R: Read>(
+            &'b mut self,
+            stdin: &mut R,
+            stdout: &mut W,
+        ) -> Result<&'b str, Error<std::io::Error>> {
+            let mut f = output_closure(stdout);
+            self.noline.reset(&mut f)?;
+
+            loop {
+                let byte = stdin.bytes().next().unwrap_or_else(|| unreachable!())?;
+                match self.noline.advance(byte, &mut f) {
                     Some(rc) => {
                         rc?;
 
-                        return Ok(noline.buffer.as_str());
+                        break Ok(self.noline.buffer.as_str());
                     }
                     None => (),
                 }
             }
         }
-
-        unreachable!();
     }
 }
 
@@ -117,16 +145,14 @@ pub mod embedded {
     use core::cell::RefCell;
 
     use super::*;
-    use crate::line_buffer::LineBuffer;
     use embedded_hal::serial::{Read, Write};
     use nb::block;
 
-    pub fn write<W, E>(tx: &mut W, buf: &[u8]) -> Result<(), Error<W::Error>>
+    fn write_bytes<W, E>(bytes: &[u8], tx: &mut W) -> Result<(), Error<E>>
     where
         W: Write<u8, Error = E>,
-        // E: core::convert::From<<W as embedded_hal::prelude::_embedded_hal_serial_Write<u8>>::Error>,
     {
-        for b in buf {
+        for b in bytes {
             block!(tx.write(*b))?;
         }
 
@@ -135,32 +161,61 @@ pub mod embedded {
         Ok(())
     }
 
-    pub fn readline<'a, B, S, E>(
-        buffer: &'a mut LineBuffer<B>,
-        prompt: &'a str,
-        serial: &mut S,
-    ) -> Result<&'a str, Error<E>>
+    fn output_closure<'b, W, E>(tx: &'b mut W) -> impl FnMut(&[u8]) -> Result<(), Error<E>> + 'b
+    where
+        W: Write<u8, Error = E>,
+    {
+        |bytes| write_bytes(bytes, tx)
+    }
+
+    pub struct Editor<'a, B>
     where
         B: Buffer,
-        S: Write<u8, Error = E> + Read<u8, Error = E>,
     {
-        let serial = RefCell::new(serial);
+        noline: Noline<'a, B>,
+    }
 
-        let mut noline = NolineInitializer::new(buffer, prompt).initialize(
-            || Ok(block!(serial.borrow_mut().read())?),
-            |bytes| {
-                write(*serial.borrow_mut(), bytes)?;
-                Ok(())
-            },
-        )?;
+    impl<'a, B> Editor<'a, B>
+    where
+        B: Buffer,
+    {
+        pub fn new<S, E>(prompt: &'a str, serial: &mut S) -> Result<Self, Error<E>>
+        where
+            S: Write<u8, Error = E> + Read<u8, Error = E>,
+        {
+            let serial = RefCell::new(serial);
 
-        let serial = serial.into_inner();
+            let noline = NolineInitializer::new(prompt).initialize(
+                || Ok(block!(serial.borrow_mut().read())?),
+                |bytes| {
+                    let mut tx = serial.borrow_mut();
 
-        loop {
-            let b = block!(serial.read())?;
+                    write_bytes(bytes, *tx)
+                },
+            )?;
 
-            match noline.advance::<_, E>(b, |output| {
-                write(serial, output)?;
+            Ok(Self { noline })
+        }
+
+        pub fn readline<'b, S, E>(&'b mut self, serial: &mut S) -> Result<&'b str, Error<E>>
+        where
+            S: Write<u8, Error = E> + Read<u8, Error = E>,
+        {
+            self.noline.reset(output_closure(serial))?;
+
+            loop {
+                let byte = block!(serial.read())?;
+
+                match self.noline.advance(byte, output_closure(serial)) {
+                    Some(rc) => {
+                        rc?;
+
+                        break Ok(self.noline.buffer.as_str());
+                    }
+                    None => (),
+                }
+            }
+        }
                 Ok(())
             }) {
                 Some(rc) => {
