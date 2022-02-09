@@ -138,6 +138,120 @@ pub mod with_std {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use std::string::ToString;
+        use std::{thread, vec::Vec};
+
+        use crossbeam::channel::{Receiver, Sender};
+
+        use crate::testlib::{test_cases, test_editor_with_case, MockTerminal};
+
+        use super::*;
+
+        struct MockStdout {
+            buffer: Vec<u8>,
+            tx: Sender<Option<u8>>,
+        }
+
+        impl MockStdout {
+            fn new(tx: Sender<Option<u8>>) -> Self {
+                Self {
+                    buffer: Vec::new(),
+                    tx,
+                }
+            }
+
+            fn send_eof(&self) {
+                self.tx.send(None).unwrap();
+            }
+        }
+
+        struct MockStdin {
+            rx: Receiver<u8>,
+        }
+
+        impl MockStdin {
+            fn new(rx: Receiver<u8>) -> Self {
+                Self { rx }
+            }
+        }
+
+        struct MockIO {
+            stdin: MockStdin,
+            stdout: MockStdout,
+        }
+
+        impl MockIO {
+            fn new(stdin: MockStdin, stdout: MockStdout) -> Self {
+                Self { stdout, stdin }
+            }
+
+            fn from_terminal(terminal: &MockTerminal) -> Self {
+                Self::new(
+                    MockStdin::new(terminal.keyboard_rx.clone()),
+                    MockStdout::new(terminal.terminal_tx.clone()),
+                )
+            }
+
+            fn get_pipes(self) -> (MockStdin, MockStdout) {
+                (self.stdin, self.stdout)
+            }
+        }
+
+        impl Read for MockStdin {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                for i in 0..(buf.len()) {
+                    if let Ok(byte) = self.rx.recv() {
+                        buf[i] = byte;
+                    }
+                }
+
+                Ok(buf.len())
+            }
+        }
+
+        impl Write for MockStdout {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.buffer.extend(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                for byte in self.buffer.drain(0..) {
+                    self.tx.send(Some(byte)).unwrap();
+                }
+
+                Ok(())
+            }
+        }
+
+        #[test]
+        fn test_editor() {
+            let prompt = "> ";
+
+            for case in test_cases() {
+                test_editor_with_case(
+                    case,
+                    prompt,
+                    |term| MockIO::from_terminal(&term).get_pipes(),
+                    |(mut stdin, mut stdout)| {
+                        let mut editor =
+                            Editor::<Vec<u8>>::new(prompt, &mut stdin, &mut stdout).unwrap();
+                        thread::spawn(move || {
+                            if let Ok(s) = editor.readline(&mut stdin, &mut stdout) {
+                                stdout.send_eof();
+                                Some(s.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                    },
+                )
+            }
+        }
+    }
 }
 
 #[cfg(any(test, feature = "embedded"))]
@@ -216,18 +330,97 @@ pub mod embedded {
                 }
             }
         }
-                Ok(())
-            }) {
-                Some(rc) => {
-                    if rc.is_ok() {
-                        break Ok(noline.buffer.as_str());
-                    } else {
-                        break Err(Error::ParserError);
-                    }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::string::ToString;
+        use std::{thread, vec::Vec};
+
+        use crossbeam::channel::{Receiver, Sender};
+
+        use crate::line_buffer::StaticBuffer;
+        use crate::testlib::test_editor_with_case;
+        use crate::testlib::{test_cases, MockTerminal};
+
+        use super::*;
+
+        struct MockSerial {
+            rx: Receiver<u8>,
+            buffer: Vec<u8>,
+            tx: Sender<Option<u8>>,
+        }
+
+        impl MockSerial {
+            fn new(tx: Sender<Option<u8>>, rx: Receiver<u8>) -> Self {
+                Self {
+                    rx,
+                    buffer: Vec::new(),
+                    tx,
                 }
-                None => (),
+            }
+
+            fn from_terminal(terminal: &MockTerminal) -> Self {
+                Self::new(terminal.terminal_tx.clone(), terminal.keyboard_rx.clone())
+            }
+
+            fn send_eof(&mut self) {
+                self.tx.send(None).unwrap();
             }
         }
 
+        impl Read<u8> for MockSerial {
+            type Error = ();
+
+            fn read(&mut self) -> nb::Result<u8, Self::Error> {
+                if let Ok(byte) = self.rx.try_recv() {
+                    Ok(byte)
+                } else {
+                    Err(nb::Error::WouldBlock)
+                }
+            }
+        }
+
+        impl Write<u8> for MockSerial {
+            type Error = ();
+
+            fn write(&mut self, word: u8) -> nb::Result<(), Self::Error> {
+                self.buffer.push(word);
+                Ok(())
+            }
+
+            fn flush(&mut self) -> nb::Result<(), Self::Error> {
+                for byte in self.buffer.drain(0..) {
+                    self.tx.send(Some(byte)).unwrap();
+                }
+
+                Ok(())
+            }
+        }
+
+        #[test]
+        fn test_editor() {
+            let prompt = "> ";
+
+            for case in test_cases() {
+                test_editor_with_case(
+                    case,
+                    prompt,
+                    |term| MockSerial::from_terminal(term),
+                    |mut serial| {
+                        let mut editor =
+                            Editor::<StaticBuffer<100>>::new(prompt, &mut serial).unwrap();
+                        thread::spawn(move || {
+                            if let Ok(s) = editor.readline(&mut serial) {
+                                serial.send_eof();
+                                Some(s.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                    },
+                )
+            }
+        }
     }
 }

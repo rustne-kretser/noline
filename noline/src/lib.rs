@@ -14,3 +14,6 @@ mod output;
 pub mod sync;
 pub(crate) mod terminal;
 mod utf8;
+
+#[cfg(test)]
+pub(crate) mod testlib;

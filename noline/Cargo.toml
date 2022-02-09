@@ -17,3 +17,4 @@ std = []
 embedded = ["embedded-hal", "nb"]
 
 [dev-dependencies]
+crossbeam = "0.8.1"

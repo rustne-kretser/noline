@@ -243,57 +243,11 @@ impl Parser {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::testlib::AsByteVec;
+
     use super::*;
     use std::vec::Vec;
     use ControlCharacter::*;
-
-    pub trait AsByteVec {
-        fn as_byte_vec(self) -> Vec<u8>;
-    }
-
-    impl AsByteVec for &str {
-        fn as_byte_vec(self) -> Vec<u8> {
-            self.bytes().into_iter().collect()
-        }
-    }
-
-    impl AsByteVec for ControlCharacter {
-        fn as_byte_vec(self) -> Vec<u8> {
-            [self.into()].into_iter().collect()
-        }
-    }
-
-    impl AsByteVec for Vec<ControlCharacter> {
-        fn as_byte_vec(self) -> Vec<u8> {
-            self.into_iter().map(|c| c.into()).collect()
-        }
-    }
-
-    impl<const N: usize> AsByteVec for [ControlCharacter; N] {
-        fn as_byte_vec(self) -> Vec<u8> {
-            self.into_iter().map(|c| c.into()).collect()
-        }
-    }
-
-    impl AsByteVec for Vec<&str> {
-        fn as_byte_vec(self) -> Vec<u8> {
-            self.into_iter()
-                .map(|s| s.as_bytes().into_iter())
-                .flatten()
-                .map(|&b| b)
-                .collect()
-        }
-    }
-
-    impl<const N: usize> AsByteVec for [&str; N] {
-        fn as_byte_vec(self) -> Vec<u8> {
-            self.into_iter()
-                .map(|s| s.as_bytes().into_iter())
-                .flatten()
-                .map(|&b| b)
-                .collect()
-        }
-    }
 
     fn input_sequence(parser: &mut Parser, seq: impl AsByteVec) -> Vec<Action> {
         seq.as_byte_vec()
