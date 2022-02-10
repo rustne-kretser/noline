@@ -54,6 +54,11 @@ impl Terminal {
         }
     }
 
+    pub fn reset(&mut self, cursor: Cursor) {
+        self.cursor = cursor;
+        self.row_offset = -(cursor.row as isize);
+    }
+
     pub fn get_cursor(&self) -> Cursor {
         self.cursor
     }

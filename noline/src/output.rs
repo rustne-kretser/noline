@@ -212,6 +212,7 @@ enum Step<'a> {
     Print(&'a str),
     NewlinePrint(&'a str),
     Move(MoveCursorToPosition),
+    GetPosition,
     ClearLine,
     Erase,
     Newline,
@@ -276,6 +277,7 @@ impl<'a> Step<'a> {
 
                 self.transition(Step::Done, OutputItem::Slice("\r\x1b[J".as_bytes()))
             }
+            GetPosition => self.transition(Step::Done, OutputItem::Slice("\x1b[6n".as_bytes())),
             Done => None,
         }
     }
@@ -372,6 +374,9 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
         ) -> Option<OutputItem<'a>> {
             loop {
                 if let Some((step, _)) = steps.as_mut_slice().split_first_mut() {
+                    #[cfg(test)]
+                    dbg!(&step);
+
                     if let Some(bytes) = step.advance(terminal) {
                         break Some(bytes);
                     } else {
@@ -483,9 +488,9 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                         }
                         OutputAction::RingBell => OutputState::OneStep([Bell].into_iter()),
                         OutputAction::PrintNewline => OutputState::OneStep([Newline].into_iter()),
-                        OutputAction::ClearAndPrintPrompt => {
-                            OutputState::TwoSteps([ClearLine, Print(self.prompt)].into_iter())
-                        }
+                        OutputAction::ClearAndPrintPrompt => OutputState::ThreeSteps(
+                            [ClearLine, Print(self.prompt), GetPosition].into_iter(),
+                        ),
                         OutputAction::Done => {
                             OutputState::TwoSteps([Newline, EndOfString].into_iter())
                         }
@@ -690,7 +695,7 @@ mod tests {
             OutputAction::ClearAndPrintPrompt,
         ));
 
-        assert_eq!(result, "\r\x1b[J> ");
+        assert_eq!(result, "\r\x1b[J> \x1b[6n");
 
         line_buffer.insert_str(0, "Hello, world!");
 

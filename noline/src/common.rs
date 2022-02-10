@@ -206,10 +206,14 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
                     }
                 }
                 CSI::End => self.generate_output(MoveCursor(CursorMove::End)),
+                CSI::CPR(row, column) => {
+                    let cursor = Cursor::new(row - 1, column - 1);
+                    self.terminal.reset(cursor);
+                    self.generate_output(Nothing)
+                }
                 CSI::Unknown(_) => self.generate_output(RingBell),
                 CSI::CUU(_) => self.generate_output(RingBell),
                 CSI::CUD(_) => self.generate_output(RingBell),
-                CSI::CPR(_, _) => self.generate_output(RingBell),
                 CSI::CUP(_, _) => self.generate_output(RingBell),
                 CSI::ED(_) => self.generate_output(RingBell),
                 CSI::DSR => self.generate_output(RingBell),

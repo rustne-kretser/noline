@@ -152,19 +152,15 @@ pub mod with_std {
 
         struct MockStdout {
             buffer: Vec<u8>,
-            tx: Sender<Option<u8>>,
+            tx: Sender<u8>,
         }
 
         impl MockStdout {
-            fn new(tx: Sender<Option<u8>>) -> Self {
+            fn new(tx: Sender<u8>) -> Self {
                 Self {
                     buffer: Vec::new(),
                     tx,
                 }
-            }
-
-            fn send_eof(&self) {
-                self.tx.send(None).unwrap();
             }
         }
 
@@ -188,11 +184,10 @@ pub mod with_std {
                 Self { stdout, stdin }
             }
 
-            fn from_terminal(terminal: &MockTerminal) -> Self {
-                Self::new(
-                    MockStdin::new(terminal.keyboard_rx.clone()),
-                    MockStdout::new(terminal.terminal_tx.clone()),
-                )
+            fn from_terminal(terminal: &mut MockTerminal) -> Self {
+                let (tx, rx) = terminal.take_io();
+
+                Self::new(MockStdin::new(rx), MockStdout::new(tx.unwrap()))
             }
 
             fn get_pipes(self) -> (MockStdin, MockStdout) {
@@ -203,8 +198,9 @@ pub mod with_std {
         impl Read for MockStdin {
             fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
                 for i in 0..(buf.len()) {
-                    if let Ok(byte) = self.rx.recv() {
-                        buf[i] = byte;
+                    match self.rx.recv() {
+                        Ok(byte) => buf[i] = byte,
+                        Err(_) => return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
                     }
                 }
 
@@ -220,7 +216,7 @@ pub mod with_std {
 
             fn flush(&mut self) -> std::io::Result<()> {
                 for byte in self.buffer.drain(0..) {
-                    self.tx.send(Some(byte)).unwrap();
+                    self.tx.send(byte).unwrap();
                 }
 
                 Ok(())
@@ -235,16 +231,13 @@ pub mod with_std {
                 test_editor_with_case(
                     case,
                     prompt,
-                    |term| MockIO::from_terminal(&term).get_pipes(),
-                    |(mut stdin, mut stdout)| {
+                    |term| MockIO::from_terminal(term).get_pipes(),
+                    |(mut stdin, mut stdout), string_tx| {
                         let mut editor =
                             Editor::<Vec<u8>>::new(prompt, &mut stdin, &mut stdout).unwrap();
                         thread::spawn(move || {
-                            if let Ok(s) = editor.readline(&mut stdin, &mut stdout) {
-                                stdout.send_eof();
-                                Some(s.to_string())
-                            } else {
-                                None
+                            while let Ok(s) = editor.readline(&mut stdin, &mut stdout) {
+                                string_tx.send(s.to_string()).unwrap();
                             }
                         })
                     },
@@ -337,7 +330,7 @@ pub mod embedded {
         use std::string::ToString;
         use std::{thread, vec::Vec};
 
-        use crossbeam::channel::{Receiver, Sender};
+        use crossbeam::channel::{Receiver, Sender, TryRecvError};
 
         use crate::line_buffer::StaticBuffer;
         use crate::testlib::test_editor_with_case;
@@ -348,11 +341,11 @@ pub mod embedded {
         struct MockSerial {
             rx: Receiver<u8>,
             buffer: Vec<u8>,
-            tx: Sender<Option<u8>>,
+            tx: Sender<u8>,
         }
 
         impl MockSerial {
-            fn new(tx: Sender<Option<u8>>, rx: Receiver<u8>) -> Self {
+            fn new(tx: Sender<u8>, rx: Receiver<u8>) -> Self {
                 Self {
                     rx,
                     buffer: Vec::new(),
@@ -360,12 +353,9 @@ pub mod embedded {
                 }
             }
 
-            fn from_terminal(terminal: &MockTerminal) -> Self {
-                Self::new(terminal.terminal_tx.clone(), terminal.keyboard_rx.clone())
-            }
-
-            fn send_eof(&mut self) {
-                self.tx.send(None).unwrap();
+            fn from_terminal(terminal: &mut MockTerminal) -> Self {
+                let (tx, rx) = terminal.take_io();
+                Self::new(tx.unwrap(), rx)
             }
         }
 
@@ -373,10 +363,12 @@ pub mod embedded {
             type Error = ();
 
             fn read(&mut self) -> nb::Result<u8, Self::Error> {
-                if let Ok(byte) = self.rx.try_recv() {
-                    Ok(byte)
-                } else {
-                    Err(nb::Error::WouldBlock)
+                match self.rx.try_recv() {
+                    Ok(byte) => Ok(byte),
+                    Err(err) => match err {
+                        TryRecvError::Empty => Err(nb::Error::WouldBlock),
+                        TryRecvError::Disconnected => Err(nb::Error::Other(())),
+                    },
                 }
             }
         }
@@ -391,7 +383,7 @@ pub mod embedded {
 
             fn flush(&mut self) -> nb::Result<(), Self::Error> {
                 for byte in self.buffer.drain(0..) {
-                    self.tx.send(Some(byte)).unwrap();
+                    self.tx.send(byte).unwrap();
                 }
 
                 Ok(())
@@ -407,15 +399,12 @@ pub mod embedded {
                     case,
                     prompt,
                     |term| MockSerial::from_terminal(term),
-                    |mut serial| {
+                    |mut serial, string_tx| {
                         let mut editor =
                             Editor::<StaticBuffer<100>>::new(prompt, &mut serial).unwrap();
                         thread::spawn(move || {
-                            if let Ok(s) = editor.readline(&mut serial) {
-                                serial.send_eof();
-                                Some(s.to_string())
-                            } else {
-                                None
+                            while let Ok(s) = editor.readline(&mut serial) {
+                                string_tx.send(s.to_string()).unwrap();
                             }
                         })
                     },

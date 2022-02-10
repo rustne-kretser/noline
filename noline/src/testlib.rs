@@ -26,8 +26,8 @@ pub struct MockTerminal {
     columns: usize,
     saved_cursor: Option<Cursor>,
     pub bell: bool,
-    pub terminal_tx: Sender<Option<u8>>,
-    pub terminal_rx: Receiver<Option<u8>>,
+    pub terminal_tx: Option<Sender<u8>>,
+    pub terminal_rx: Receiver<u8>,
     pub keyboard_tx: Sender<u8>,
     pub keyboard_rx: Receiver<u8>,
 }
@@ -45,7 +45,7 @@ impl MockTerminal {
             columns,
             saved_cursor: None,
             bell: false,
-            terminal_tx,
+            terminal_tx: Some(terminal_tx),
             terminal_rx,
             keyboard_tx,
             keyboard_rx,
@@ -128,7 +128,7 @@ impl MockTerminal {
                 }
                 CSI::DSR => {
                     return Some(
-                        format!("\x1b[{};{}R", self.cursor.row + 1, self.cursor.column + 1,)
+                        format!("\x1b[{};{}R", self.cursor.row + 1, self.cursor.column + 1)
                             .bytes()
                             .collect::<Vec<u8>>(),
                     );
@@ -154,11 +154,13 @@ impl MockTerminal {
                 match ctrl {
                     ControlCharacter::CarriageReturn => self.cursor.column = 0,
                     ControlCharacter::LineFeed => {
+                        dbg!(self.cursor);
                         if self.cursor.row + 1 == self.rows {
                             self.scroll_up(1);
                         } else {
                             self.cursor.row += 1;
                         }
+                        dbg!(self.cursor);
                     }
                     ControlCharacter::CtrlG => self.bell = true,
                     _ => (),
@@ -188,15 +190,13 @@ impl MockTerminal {
     pub fn listen(&mut self) {
         loop {
             if let Ok(b_in) = self.terminal_rx.recv() {
-                if let Some(b_in) = b_in {
-                    if let Some(output) = self.advance(b_in) {
-                        for b_out in output {
-                            self.keyboard_tx.send(b_out).unwrap();
-                        }
+                if let Some(output) = self.advance(b_in) {
+                    for b_out in output {
+                        self.keyboard_tx.send(b_out).unwrap();
                     }
-                } else {
-                    break;
                 }
+            } else {
+                break;
             }
         }
     }
@@ -206,6 +206,10 @@ impl MockTerminal {
             self.listen();
             self
         })
+    }
+
+    pub fn take_io(&mut self) -> (Option<Sender<u8>>, Receiver<u8>) {
+        (self.terminal_tx.take(), self.keyboard_rx.clone())
     }
 }
 
@@ -258,36 +262,45 @@ pub trait AsByteVec {
 }
 
 pub struct TestCase {
-    pub input: Vec<u8>,
-    pub output: Vec<u8>,
+    pub input: Vec<Vec<u8>>,
+    pub output: Vec<String>,
 }
 
 impl TestCase {
-    pub fn new(input: impl AsByteVec, output: impl AsByteVec) -> Self {
+    pub fn new(
+        input: impl IntoIterator<Item = impl AsByteVec>,
+        output: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         Self {
-            input: input.as_byte_vec(),
-            output: output.as_byte_vec(),
+            input: input.into_iter().map(|item| item.as_byte_vec()).collect(),
+            output: output.into_iter().map(|s| s.into()).collect(),
         }
     }
 
-    pub fn output_as_string(&self) -> String {
-        String::from_utf8(self.output.clone()).unwrap()
-    }
-
     pub fn screen_as_string(&self, prompt: &str, columns: usize) -> String {
-        prompt
-            .chars()
-            .chain(self.output_as_string().chars())
-            .fold(Vec::new(), |mut s, c| {
-                s.push(c);
+        let mut screen = Vec::new();
+        let mut line = Vec::new();
 
-                if s.len() % columns == 0 {
-                    s.push('\n');
+        line.extend(prompt.chars());
+
+        for s in &self.output {
+            for c in s.chars() {
+                line.push(c);
+
+                if line.len() >= columns {
+                    screen.extend(line.drain(0..));
+                    screen.push('\n');
                 }
-                s
-            })
-            .iter()
-            .collect()
+            }
+
+            if line.len() > 0 {
+                screen.extend(line.drain(0..));
+                screen.push('\n');
+                screen.extend(prompt.chars());
+            }
+        }
+
+        screen.into_iter().collect()
     }
 }
 
@@ -313,10 +326,7 @@ impl AsByteVec for InputBuilder {
 
 pub fn test_cases() -> Vec<TestCase> {
     vec![
-        {
-            let s = "Hello, World!";
-            TestCase::new(s, s)
-        },
+        TestCase::new(["Hello, World!"], ["Hello, World!"]),
         {
             let mut input = InputBuilder::new();
 
@@ -325,37 +335,61 @@ pub fn test_cases() -> Vec<TestCase> {
             input.add(CtrlD);
             input.add("de");
 
-            TestCase::new(input, "abde")
+            TestCase::new([input], ["abde"])
         },
+        TestCase::new(["abc", "def"], ["abc", "def"]),
     ]
 }
 
 pub fn test_editor_with_case<IO: Send + 'static>(
     case: TestCase,
     prompt: &str,
-    get_io: impl FnOnce(&MockTerminal) -> IO,
-    spawn_thread: impl FnOnce(IO) -> JoinHandle<Option<String>>,
+    get_io: impl FnOnce(&mut MockTerminal) -> IO,
+    spawn_thread: impl FnOnce(IO, Sender<String>) -> JoinHandle<()>,
 ) {
     let (rows, columns) = (20, 80);
 
-    let term = MockTerminal::new(rows, columns, Cursor::new(0, 0));
+    let (string_tx, string_rx) = unbounded();
+
+    let mut term = MockTerminal::new(rows, columns, Cursor::new(0, 0));
 
     let keyboard_tx = term.keyboard_tx.clone();
 
-    let io = get_io(&term);
+    let io = get_io(&mut term);
 
     let term = term.start_thread();
-    let handle = spawn_thread(io);
+    let handle = spawn_thread(io, string_tx);
 
-    for &b in case.input.iter() {
-        keyboard_tx.send(b).unwrap();
-    }
+    let output: Vec<String> = case
+        .input
+        .iter()
+        .map(|seq| {
+            // To avoid race with prompt reset, we need to wait a
+            // little. This is not ideal, but will do for now.
+            thread::sleep(core::time::Duration::from_millis(100));
 
-    keyboard_tx.send(0xd).unwrap();
+            for &b in seq {
+                keyboard_tx.send(b).unwrap();
+            }
 
+            keyboard_tx.send(0xd).unwrap();
+
+            string_rx.recv().unwrap()
+        })
+        .collect();
+
+    keyboard_tx.send(0x3).unwrap();
+
+    drop(keyboard_tx);
     let term = term.join().unwrap();
 
-    assert_eq!(handle.join().unwrap(), Some(case.output_as_string()));
+    handle.join().unwrap();
+
+    assert_eq!(output.len(), case.output.len());
+
+    for (seen, expected) in output.iter().zip(case.output.iter()) {
+        assert_eq!(seen, expected);
+    }
 
     assert_eq!(
         term.screen_as_string(),

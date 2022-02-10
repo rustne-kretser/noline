@@ -100,7 +100,8 @@ impl CSI {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+#[cfg_attr(test, derive(Debug))]
+#[derive(Eq, PartialEq, Copy, Clone)]
 pub enum Action {
     Ignore,
     Print(Utf8Char),

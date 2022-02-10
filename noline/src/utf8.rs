@@ -49,10 +49,17 @@ enum Utf8DecoderState {
     Done,
 }
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+#[derive(Eq, PartialEq, Copy, Clone)]
 pub struct Utf8Char {
     buf: [u8; 4],
     len: u8,
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for Utf8Char {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Utf8Char").field(&self.to_char()).finish()
+    }
 }
 
 impl Utf8Char {
@@ -102,7 +109,8 @@ impl Utf8Char {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Debug))]
+#[derive(Eq, PartialEq)]
 pub enum Utf8DecoderStatus {
     Continuation,
     Done(Utf8Char),
