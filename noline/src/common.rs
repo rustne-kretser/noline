@@ -247,7 +247,7 @@ pub(crate) mod tests {
         terminal.bell = false;
 
         for input in input.as_byte_vec() {
-            noline.advance::<_, ()>(input, |bytes| {
+            noline.advance::<_, (), ()>(input, |bytes| {
                 for output in bytes {
                     terminal.advance(*output);
                 }
@@ -278,18 +278,12 @@ pub(crate) mod tests {
 
         let noline = NolineInitializer::new(prompt)
             .initialize(
-                || {
-                    if let Ok(b) = rx.try_recv() {
-                        Ok(b)
-                    } else {
-                        Err(Error::IoError(()))
-                    }
-                },
+                || rx.try_recv().or_else(|_| Error::read_error(())),
                 |bytes| {
                     for byte in bytes {
                         if let Some(bytes) = terminal.advance(*byte) {
                             for byte in bytes {
-                                tx.send(byte).unwrap();
+                                tx.send(byte).or_else(|_| Error::write_error(()))?;
                             }
                         }
                     }

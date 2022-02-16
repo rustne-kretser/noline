@@ -6,11 +6,11 @@ use crate::common;
 use crate::output::{Output, OutputItem};
 
 impl<'a, B: Buffer> common::NolineInitializer<'a, B, Sync> {
-    pub fn initialize<E>(
+    pub fn initialize<IE, OE>(
         mut self,
-        mut input: impl FnMut() -> Result<u8, Error<E>>,
-        mut output: impl FnMut(&'a [u8]) -> Result<(), Error<E>>,
-    ) -> Result<Noline<'a, B>, Error<E>> {
+        mut input: impl FnMut() -> Result<u8, Error<IE, OE>>,
+        mut output: impl FnMut(&'a [u8]) -> Result<(), Error<IE, OE>>,
+    ) -> Result<Noline<'a, B>, Error<IE, OE>> {
         output(self.clear_line())?;
         output(self.prompt.as_bytes())?;
         output(self.probe_size())?;
@@ -32,9 +32,12 @@ impl<'a, B: Buffer> common::NolineInitializer<'a, B, Sync> {
 pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Sync>;
 
 impl<'a, B: Buffer> common::Noline<'a, B, Sync> {
-    pub fn handle_ouput<'b, F, E>(output: Output<'b, B>, mut f: F) -> Option<Result<(), Error<E>>>
+    pub fn handle_ouput<'b, F, IE, OE>(
+        output: Output<'b, B>,
+        mut f: F,
+    ) -> Option<Result<(), Error<IE, OE>>>
     where
-        F: FnMut(&[u8]) -> Result<(), Error<E>>,
+        F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
     {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
@@ -53,16 +56,20 @@ impl<'a, B: Buffer> common::Noline<'a, B, Sync> {
         None
     }
 
-    pub fn advance<'b, F, E>(&'b mut self, input: u8, f: F) -> Option<Result<(), Error<E>>>
+    pub fn advance<'b, F, IE, OE>(
+        &'b mut self,
+        input: u8,
+        f: F,
+    ) -> Option<Result<(), Error<IE, OE>>>
     where
-        F: FnMut(&[u8]) -> Result<(), Error<E>>,
+        F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
     {
         Self::handle_ouput(self.input_byte(input), f)
     }
 
-    pub fn reset<'b, F, E>(&'b mut self, f: F) -> Result<(), Error<E>>
+    pub fn reset<'b, F, IE, OE>(&'b mut self, f: F) -> Result<(), Error<IE, OE>>
     where
-        F: FnMut(&[u8]) -> Result<(), Error<E>>,
+        F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
     {
         if let Some(res) = Self::handle_ouput(self.reset_line(), f) {
             res?;
@@ -89,10 +96,12 @@ pub mod with_std {
 
     fn output_closure<'b, W: Write>(
         stdout: &'b mut W,
-    ) -> impl FnMut(&[u8]) -> Result<(), Error<std::io::Error>> + 'b {
+    ) -> impl FnMut(&[u8]) -> Result<(), Error<std::io::Error, std::io::Error>> + 'b {
         |bytes| {
-            stdout.write_all(bytes)?;
-            stdout.flush()?;
+            stdout
+                .write_all(bytes)
+                .or_else(|err| Error::write_error(err))?;
+            stdout.flush().or_else(|err| Error::write_error(err))?;
             Ok(())
         }
     }
@@ -105,10 +114,14 @@ pub mod with_std {
             prompt: &'a str,
             stdin: &mut R,
             stdout: &mut W,
-        ) -> Result<Self, Error<std::io::Error>> {
+        ) -> Result<Self, Error<std::io::Error, std::io::Error>> {
             let noline = NolineInitializer::new(prompt).initialize(
                 || {
-                    let b = stdin.bytes().next().unwrap_or_else(|| unreachable!())?;
+                    let b = stdin
+                        .bytes()
+                        .next()
+                        .unwrap_or_else(|| unreachable!())
+                        .or_else(|err| Error::read_error(err))?;
                     Ok(b)
                 },
                 output_closure(stdout),
@@ -121,12 +134,16 @@ pub mod with_std {
             &'b mut self,
             stdin: &mut R,
             stdout: &mut W,
-        ) -> Result<&'b str, Error<std::io::Error>> {
+        ) -> Result<&'b str, Error<std::io::Error, std::io::Error>> {
             let mut f = output_closure(stdout);
             self.noline.reset(&mut f)?;
 
             loop {
-                let byte = stdin.bytes().next().unwrap_or_else(|| unreachable!())?;
+                let byte = stdin
+                    .bytes()
+                    .next()
+                    .unwrap_or_else(|| unreachable!())
+                    .or_else(|err| Error::read_error(err))?;
                 match self.noline.advance(byte, &mut f) {
                     Some(rc) => {
                         rc?;
@@ -255,22 +272,24 @@ pub mod embedded {
     use embedded_hal::serial::{Read, Write};
     use nb::block;
 
-    fn write_bytes<W, E>(bytes: &[u8], tx: &mut W) -> Result<(), Error<E>>
+    fn write_bytes<W, RE, WE>(bytes: &[u8], tx: &mut W) -> Result<(), Error<RE, WE>>
     where
-        W: Write<u8, Error = E>,
+        W: Write<u8, Error = WE>,
     {
         for b in bytes {
-            block!(tx.write(*b))?;
+            block!(tx.write(*b)).or_else(|err| Error::write_error(err))?;
         }
 
-        block!(tx.flush())?;
+        block!(tx.flush()).or_else(|err| Error::write_error(err))?;
 
         Ok(())
     }
 
-    fn output_closure<'b, W, E>(tx: &'b mut W) -> impl FnMut(&[u8]) -> Result<(), Error<E>> + 'b
+    fn output_closure<'b, W, RE, WE>(
+        tx: &'b mut W,
+    ) -> impl FnMut(&[u8]) -> Result<(), Error<RE, WE>> + 'b
     where
-        W: Write<u8, Error = E>,
+        W: Write<u8, Error = WE>,
     {
         |bytes| write_bytes(bytes, tx)
     }
@@ -286,32 +305,36 @@ pub mod embedded {
     where
         B: Buffer,
     {
-        pub fn new<S, E>(prompt: &'a str, serial: &mut S) -> Result<Self, Error<E>>
+        pub fn new<S, RE, WE>(prompt: &'a str, serial: &mut S) -> Result<Self, Error<RE, WE>>
         where
-            S: Write<u8, Error = E> + Read<u8, Error = E>,
+            S: Write<u8, Error = WE> + Read<u8, Error = RE>,
         {
             let serial = RefCell::new(serial);
 
             let noline = NolineInitializer::new(prompt).initialize(
-                || Ok(block!(serial.borrow_mut().read())?),
+                || Ok(block!(serial.borrow_mut().read()).or_else(|err| Error::read_error(err))?),
                 |bytes| {
                     let mut tx = serial.borrow_mut();
 
-                    write_bytes(bytes, *tx)
+                    write_bytes(bytes, *tx)?;
+                    Ok(())
                 },
             )?;
 
             Ok(Self { noline })
         }
 
-        pub fn readline<'b, S, E>(&'b mut self, serial: &mut S) -> Result<&'b str, Error<E>>
+        pub fn readline<'b, S, RE, WE>(
+            &'b mut self,
+            serial: &mut S,
+        ) -> Result<&'b str, Error<RE, WE>>
         where
-            S: Write<u8, Error = E> + Read<u8, Error = E>,
+            S: Write<u8, Error = WE> + Read<u8, Error = RE>,
         {
             self.noline.reset(output_closure(serial))?;
 
             loop {
-                let byte = block!(serial.read())?;
+                let byte = block!(serial.read()).or_else(|err| Error::read_error(err))?;
 
                 match self.noline.advance(byte, output_closure(serial)) {
                     Some(rc) => {

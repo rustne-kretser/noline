@@ -1,12 +1,17 @@
 #[derive(Debug)]
-pub enum Error<E> {
+pub enum Error<RE, WE> {
     ParserError,
     Aborted,
-    IoError(E),
+    ReadError(RE),
+    WriteError(WE),
 }
 
-impl<E> From<E> for Error<E> {
-    fn from(err: E) -> Self {
-        Self::IoError(err)
+impl<RE, WE> Error<RE, WE> {
+    pub fn read_error<T>(err: RE) -> Result<T, Self> {
+        Err(Self::ReadError(err))
+    }
+
+    pub fn write_error<T>(err: WE) -> Result<T, Self> {
+        Err(Self::WriteError(err))
     }
 }
