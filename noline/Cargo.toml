@@ -2,6 +2,18 @@
 name = "noline"
 version = "0.1.0"
 edition = "2021"
+authors = ["Eivind Alexander Bergem <eivind@rustnekretser.no>"]
+license = "MPL-2.0"
+description = "A no_std line editor"
+repository = "https://github.com/rustne-kretser/noline"
+readme = "README.md"
+categories = ["no-std", "command-line-interface"]
+keywords = ["no_std", "readline"]
+include = [
+    "**/*.rs",
+    "Cargo.toml",
+]
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
