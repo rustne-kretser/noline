@@ -1,156 +1,120 @@
-// use core::future::Future;
+use crate::common;
+use crate::error::Error;
+use crate::line_buffer::Buffer;
+use crate::marker::Async;
+use crate::output::OutputItem;
 
-// use crate::common;
-// use crate::error::Error;
-// use crate::line_buffer::Buffer;
-// use crate::marker::Async;
-// use crate::output::OutputItem;
+pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Async>;
+type Noline<'a, B> = common::Noline<'a, B, Async>;
 
-// impl<'a, B: Buffer> common::NolineInitializer<'a, B, Async> {
-//     pub async fn initialize<IF, OF, E>(
-//         mut self,
-//         mut input: impl FnMut() -> IF,
-//         mut output: impl FnMut(&'a [u8]) -> OF,
-//     ) -> Result<Noline<'a, B>, Error<E>>
-//     where
-//         IF: Future<Output = Result<u8, E>>,
-//         OF: Future<Output = Result<(), E>>,
-//     {
-//         output(self.clear_line()).await?;
-//         output(self.prompt.as_bytes()).await?;
-//         output(self.probe_size()).await?;
+#[cfg(feature = "tokio")]
+pub mod with_tokio {
+    use super::*;
 
-//         let terminal = loop {
-//             let byte = input().await?;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-//             match self.advance(byte) {
-//                 common::InitializerResult::Continue => (),
-//                 common::InitializerResult::Item(terminal) => break terminal,
-//                 common::InitializerResult::InvalidInput => return Err(Error::ParserError),
-//             }
-//         };
+    async fn write<W: AsyncWriteExt + Unpin>(
+        stdout: &mut W,
+        buf: &[u8],
+    ) -> Result<(), Error<std::io::Error, std::io::Error>> {
+        stdout
+            .write_all(buf)
+            .await
+            .or_else(|err| Error::write_error(err))?;
+        Ok(())
+    }
 
-//         Ok(Noline::new(self.prompt, terminal))
-//     }
-// }
+    async fn flush<W: AsyncWriteExt + Unpin>(
+        stdout: &mut W,
+    ) -> Result<(), Error<std::io::Error, std::io::Error>> {
+        stdout
+            .flush()
+            .await
+            .or_else(|err| Error::write_error(err))?;
+        Ok(())
+    }
 
-// pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Async>;
+    async fn read<R: AsyncReadExt + Unpin>(
+        stdin: &mut R,
+    ) -> Result<u8, Error<std::io::Error, std::io::Error>> {
+        Ok(stdin
+            .read_u8()
+            .await
+            .or_else(|err| Error::read_error(err))?)
+    }
 
-// impl<'a, B: Buffer> common::Noline<'a, B, Async> {
-//     pub async fn advance<F, E>(
-//         &mut self,
-//         input: u8,
-//         f: impl Fn(&[u8]) -> F,
-//     ) -> Option<Result<(), Error<E>>>
-//     where
-//         F: Future<Output = Result<(), Error<E>>>,
-//     {
-//         for item in self.input_byte(input) {
-//             if let Some(bytes) = item.get_bytes() {
-//                 if let Err(err) = f(bytes).await {
-//                     return Some(Err(err));
-//                 }
-//             }
+    pub struct Editor<'a, B>
+    where
+        B: Buffer,
+    {
+        noline: Noline<'a, B>,
+    }
 
-//             match item {
-//                 OutputItem::EndOfString => return Some(Ok(())),
-//                 OutputItem::Abort => return Some(Err(Error::Aborted)),
-//                 _ => (),
-//             }
-//         }
+    impl<'a, B> Editor<'a, B>
+    where
+        B: Buffer,
+    {
+        pub async fn new<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
+            prompt: &'a str,
+            stdin: &mut R,
+            stdout: &mut W,
+        ) -> Result<Editor<'a, B>, Error<std::io::Error, std::io::Error>> {
+            let mut initializer = NolineInitializer::<B>::new(prompt);
 
-//         None
-//     }
-// }
+            write(stdout, initializer.init()).await?;
+            flush(stdout).await?;
 
-// type Noline<'a, B> = common::Noline<'a, B, Async>;
+            let terminal = loop {
+                let byte = read(stdin).await?;
 
-// #[cfg(feature = "tokio")]
-// pub mod with_tokio {
-//     use super::*;
+                match initializer.advance(byte) {
+                    common::InitializerResult::Continue => (),
+                    common::InitializerResult::Item(terminal) => break terminal,
+                    common::InitializerResult::InvalidInput => return Err(Error::ParserError),
+                }
+            };
 
-//     use std::sync::Arc;
-//     use std::vec::Vec;
-//     use tokio::{
-//         io::{AsyncReadExt, AsyncWriteExt},
-//         sync::Mutex,
-//     };
+            Ok(Editor {
+                noline: Noline::new(prompt, terminal),
+            })
+        }
 
-//     pub struct Editor<'a, B>
-//     where
-//         B: Buffer,
-//     {
-//         noline: Noline<'a, B>,
-//     }
+        pub async fn readline<'b, W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
+            &'b mut self,
+            stdin: &mut R,
+            stdout: &mut W,
+        ) -> Result<&'b str, Error<std::io::Error, std::io::Error>> {
+            for output in self.noline.reset_line() {
+                write(stdout, output.get_bytes().unwrap_or_else(|| unreachable!())).await?;
+            }
 
-//     impl<'a, B> Editor<'a, B>
-//     where
-//         B: Buffer,
-//     {
-//         // I thought I had a pretty good handle on lifetimes, but async
-//         // lifetimes are something else. The Arc-Mutexes aren't my first
-//         // choice, but they make the borrow checker happy.
+            flush(stdout).await?;
 
-//         pub async fn new<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
-//             prompt: &'a str,
-//             stdin: Arc<Mutex<R>>,
-//             stdout: Arc<Mutex<W>>,
-//         ) -> Result<Editor<'a, B>, Error<std::io::Error>> {
-//             let noline = NolineInitializer::new(prompt)
-//                 .initialize(
-//                     || async {
-//                         let b = stdin.lock().await.read_u8().await?;
+            let end_of_string = 'outer: loop {
+                let b = read(stdin).await?;
 
-//                         Ok(b)
-//                     },
-//                     |bytes| async {
-//                         stdout.lock().await.write_all(bytes).await?;
-//                         stdout.lock().await.flush().await?;
-//                         Ok(())
-//                     },
-//                 )
-//                 .await?;
+                for item in self.noline.input_byte(b) {
+                    if let Some(bytes) = item.get_bytes() {
+                        write(stdout, bytes).await?;
+                    }
 
-//             stdout.lock().await.flush().await?;
+                    match item {
+                        OutputItem::EndOfString => break 'outer true,
+                        OutputItem::Abort => break 'outer false,
+                        _ => (),
+                    }
+                }
 
-//             Ok(Self { noline })
-//         }
+                flush(stdout).await?;
+            };
 
-//         pub async fn readline<'b, W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
-//             &'b mut self,
-//             stdin: Arc<Mutex<R>>,
-//             stdout: Arc<Mutex<W>>,
-//         ) -> Result<&'b str, Error<std::io::Error>> {
-//             loop {
-//                 let b = stdin.lock().await.read_u8().await?;
+            flush(stdout).await?;
 
-//                 match self
-//                     .noline
-//                     .advance(b, |output| {
-//                         // I know copying bytes to a vec isn't is bad, but
-//                         // after fighting lifetime issues with async
-//                         // closures just for the better part of an
-//                         // afternoon I just don't care anymore.
-//                         let output: Vec<u8> = output.iter().map(|&b| b).collect();
-
-//                         let stdout = stdout.clone();
-//                         async move {
-//                             stdout.lock().await.write_all(output.as_slice()).await?;
-//                             Ok(())
-//                         }
-//                     })
-//                     .await
-//                 {
-//                     Some(rc) => {
-//                         rc?;
-
-//                         break Ok(self.noline.buffer.as_str());
-//                     }
-//                     None => (),
-//                 }
-
-//                 stdout.lock().await.flush().await?;
-//             }
-//         }
-//     }
-// }
+            if end_of_string {
+                Ok(self.noline.buffer.as_str())
+            } else {
+                Err(Error::Aborted)
+            }
+        }
+    }
+}
