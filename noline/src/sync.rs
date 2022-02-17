@@ -5,7 +5,16 @@ use crate::marker::Sync;
 use crate::common;
 use crate::output::{Output, OutputItem};
 
-impl<'a, B: Buffer> common::NolineInitializer<'a, B, Sync> {
+/// Initializer for synchronous line editor
+pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Sync>;
+
+impl<'a, B: Buffer> NolineInitializer<'a, B> {
+    /// Initialize terminal returning [`Noline`] or error
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - A closure that reads one byte from input
+    /// * `output` - A closure that takes a bytes slice and writes it to output
     pub fn initialize<IE, OE>(
         mut self,
         mut input: impl FnMut() -> Result<u8, Error<IE, OE>>,
@@ -27,10 +36,11 @@ impl<'a, B: Buffer> common::NolineInitializer<'a, B, Sync> {
     }
 }
 
-pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Sync>;
+/// Helper struct for building synchronous line editors
+pub type Noline<'a, B> = common::Noline<'a, B, Sync>;
 
-impl<'a, B: Buffer> common::Noline<'a, B, Sync> {
-    pub fn handle_ouput<'b, F, IE, OE>(
+impl<'a, B: Buffer> Noline<'a, B> {
+    fn handle_ouput<'b, F, IE, OE>(
         output: Output<'b, B>,
         mut f: F,
     ) -> Option<Result<(), Error<IE, OE>>>
@@ -54,17 +64,11 @@ impl<'a, B: Buffer> common::Noline<'a, B, Sync> {
         None
     }
 
-    pub fn advance<'b, F, IE, OE>(
-        &'b mut self,
-        input: u8,
-        f: F,
-    ) -> Option<Result<(), Error<IE, OE>>>
-    where
-        F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
-    {
-        Self::handle_ouput(self.input_byte(input), f)
-    }
-
+    /// Clear line and print prompt
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - A closure that takes a bytes slice and writes it to output
     pub fn reset<'b, F, IE, OE>(&'b mut self, f: F) -> Result<(), Error<IE, OE>>
     where
         F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
@@ -75,16 +79,35 @@ impl<'a, B: Buffer> common::Noline<'a, B, Sync> {
 
         Ok(())
     }
-}
 
-pub type Noline<'a, B> = common::Noline<'a, B, Sync>;
+    /// Input byte and advance state machine
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - A closure that takes a bytes slice and writes it to
+    ///         output. Is only called if there's any output.
+    pub fn advance<'b, F, IE, OE>(
+        &'b mut self,
+        input: u8,
+        f: F,
+    ) -> Option<Result<(), Error<IE, OE>>>
+    where
+        F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
+    {
+        Self::handle_ouput(self.input_byte(input), f)
+    }
+}
 
 #[cfg(any(test, feature = "std"))]
 pub mod with_std {
+    //! Implementation for `std`
+
     use super::*;
     use std::io::Read;
     use std::io::Write;
 
+    /// Line editor for `std` systems. Generic over [`std::io::Read`]
+    /// and [`std::io::Write`].
     pub struct Editor<'a, B>
     where
         B: Buffer,
@@ -108,6 +131,7 @@ pub mod with_std {
     where
         B: Buffer,
     {
+        /// Create and initialize editor
         pub fn new<W: Write, R: Read>(
             prompt: &'a str,
             stdin: &mut R,
@@ -128,6 +152,7 @@ pub mod with_std {
             Ok(Self { noline })
         }
 
+        /// Read line from `stdin`
         pub fn readline<'b, W: Write, R: Read>(
             &'b mut self,
             stdin: &mut R,
@@ -264,9 +289,10 @@ pub mod with_std {
 
 #[cfg(any(test, feature = "embedded"))]
 pub mod embedded {
-    use core::cell::RefCell;
+    //! Implementation for embedded systems
 
     use super::*;
+    use core::cell::RefCell;
     use embedded_hal::serial::{Read, Write};
     use nb::block;
 
@@ -292,6 +318,8 @@ pub mod embedded {
         |bytes| write_bytes(bytes, tx)
     }
 
+    /// Line editor for embedded systems based on traits from
+    /// `embedded_hal`.
     pub struct Editor<'a, B>
     where
         B: Buffer,
@@ -303,6 +331,7 @@ pub mod embedded {
     where
         B: Buffer,
     {
+        /// Create and initialize editor
         pub fn new<S, RE, WE>(prompt: &'a str, serial: &mut S) -> Result<Self, Error<RE, WE>>
         where
             S: Write<u8, Error = WE> + Read<u8, Error = RE>,
@@ -322,6 +351,7 @@ pub mod embedded {
             Ok(Self { noline })
         }
 
+        /// Read line from serial
         pub fn readline<'b, S, RE, WE>(
             &'b mut self,
             serial: &mut S,

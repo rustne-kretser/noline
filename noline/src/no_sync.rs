@@ -9,6 +9,8 @@ type Noline<'a, B> = common::Noline<'a, B, Async>;
 
 #[cfg(feature = "tokio")]
 pub mod with_tokio {
+    //! Implementation for tokio
+
     use super::*;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,6 +45,7 @@ pub mod with_tokio {
             .or_else(|err| Error::read_error(err))?)
     }
 
+    /// Async line editor for the `tokio` async runtime.
     pub struct Editor<'a, B>
     where
         B: Buffer,
@@ -54,6 +57,7 @@ pub mod with_tokio {
     where
         B: Buffer,
     {
+        /// Create and initialize line editor
         pub async fn new<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
             prompt: &'a str,
             stdin: &mut R,
@@ -79,6 +83,7 @@ pub mod with_tokio {
             })
         }
 
+        /// Read line from `stdin`
         pub async fn readline<'b, W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
             &'b mut self,
             stdin: &mut R,
