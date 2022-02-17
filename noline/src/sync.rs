@@ -11,9 +11,7 @@ impl<'a, B: Buffer> common::NolineInitializer<'a, B, Sync> {
         mut input: impl FnMut() -> Result<u8, Error<IE, OE>>,
         mut output: impl FnMut(&'a [u8]) -> Result<(), Error<IE, OE>>,
     ) -> Result<Noline<'a, B>, Error<IE, OE>> {
-        output(self.clear_line())?;
-        output(self.prompt.as_bytes())?;
-        output(self.probe_size())?;
+        output(self.init())?;
 
         let terminal = loop {
             let byte = input()?;

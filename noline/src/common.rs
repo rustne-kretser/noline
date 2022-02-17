@@ -40,12 +40,8 @@ impl<'a, B: Buffer, S: SyncAsync> NolineInitializer<'a, B, S> {
         }
     }
 
-    pub(crate) fn clear_line(&self) -> &'static [u8] {
-        "\r\x1b[J".as_bytes()
-    }
-
-    pub(crate) fn probe_size(&self) -> &'static [u8] {
-        "\x1b7\x1b[6n\x1b[999;999H\x1b[6n\x1b8".as_bytes()
+    pub(crate) fn init(&self) -> &'static [u8] {
+        "\r\x1b[J\x1b7\x1b[6n\x1b[999;999H\x1b[6n\x1b8".as_bytes()
     }
 
     pub(crate) fn advance(&mut self, byte: u8) -> InitializerResult<Terminal> {
@@ -276,7 +272,7 @@ pub(crate) mod tests {
 
         let mut terminal = MockTerminal::new(rows, columns, origin);
 
-        let noline = NolineInitializer::new(prompt)
+        let mut noline = NolineInitializer::new(prompt)
             .initialize(
                 || rx.try_recv().or_else(|_| Error::read_error(())),
                 |bytes| {
@@ -294,6 +290,21 @@ pub(crate) mod tests {
             .unwrap();
 
         assert!(rx.try_recv().is_err());
+
+        for item in noline.reset_line() {
+            match item {
+                crate::output::OutputItem::Slice(bytes) => {
+                    for byte in bytes {
+                        if let Some(bytes) = terminal.advance(*byte) {
+                            for byte in bytes {
+                                tx.send(byte).unwrap();
+                            }
+                        }
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
 
         assert_eq!(terminal.get_cursor(), Cursor::new(origin.row, 2));
         assert_eq!(terminal.screen_as_string(), prompt);
