@@ -1,9 +1,8 @@
 //! Buffer to hold line.
 //!
-//! The line buffer comes in two default flavours:
-//!
-//! - [`StaticLineBuffer`] - A statically allocated buffer backed by a byte array.
-//! - [`AllocLineBuffer`] - A dynamically alloced buffer backed by a `Vec<u8>`. Requires feature `alloc` or `std`.
+//! Can be backed by [`std::vec::Vec<u8>`] for dynamic allocation or
+//! [`StaticBuffer`] for static allocation. Custom implementation can
+//! be provided with the [`Buffer`] trait.
 
 use crate::utf8::Utf8Char;
 use core::{ops::Range, str::from_utf8_unchecked};
@@ -241,9 +240,6 @@ impl<const N: usize> Buffer for StaticBuffer<N> {
     }
 }
 
-/// Static line buffer
-pub type StaticLineBuffer<const N: usize> = LineBuffer<StaticBuffer<N>>;
-
 #[cfg(any(test, feature = "alloc", feature = "std"))]
 mod alloc {
     extern crate alloc;
@@ -276,9 +272,6 @@ mod alloc {
             self.as_slice()
         }
     }
-
-    /// Dynamically allocated line buffer
-    pub type AllocLineBuffer = LineBuffer<Vec<u8>>;
 }
 
 #[cfg(any(test, feature = "alloc", feature = "std"))]
@@ -286,6 +279,8 @@ pub use self::alloc::*;
 
 #[cfg(test)]
 mod tests {
+    use std::vec::Vec;
+
     use super::*;
 
     #[test]
@@ -373,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_static_line_buffer() {
-        let mut buf = StaticLineBuffer::<80>::new();
+        let mut buf = LineBuffer::<StaticBuffer<80>>::new();
 
         test_line_buffer(&mut buf);
 
@@ -390,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_alloc_line_buffer() {
-        let mut buf = AllocLineBuffer::new();
+        let mut buf = LineBuffer::<Vec<u8>>::new();
 
         test_line_buffer(&mut buf);
 

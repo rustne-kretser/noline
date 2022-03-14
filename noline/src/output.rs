@@ -540,8 +540,6 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
 mod tests {
     use std::string::String;
 
-    use crate::line_buffer::AllocLineBuffer;
-
     use super::*;
 
     use std::vec::Vec;
@@ -683,7 +681,7 @@ mod tests {
         }
 
         let prompt = "> ";
-        let mut line_buffer = AllocLineBuffer::new();
+        let mut line_buffer = LineBuffer::<Vec<u8>>::new();
         let mut terminal = Terminal::new(4, 10, Cursor::new(0, 0));
 
         let result = to_string(Output::new(
