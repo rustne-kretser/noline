@@ -244,6 +244,9 @@ impl<'a, B: Buffer> Line<'a, B> {
 pub(crate) mod tests {
     use std::vec::Vec;
 
+    use std::string::String;
+
+    use crate::line_buffer::StaticBuffer;
     use crate::terminal::Cursor;
     use crate::testlib::{csi, AsByteVec, MockTerminal};
 
@@ -620,5 +623,23 @@ pub(crate) mod tests {
 
         advance(&mut terminal, &mut line, CtrlA).unwrap();
         advance(&mut terminal, &mut line, Backspace).unwrap_err();
+    }
+
+    #[test]
+    fn static_buffer() {
+        let mut terminal = MockTerminal::new(20, 80, Cursor::new(0, 0));
+        let mut editor: Editor<StaticBuffer<20>> = Editor::new(&mut terminal);
+
+        let mut line = editor.get_line("> ", &mut terminal);
+
+        let input: String = (0..20).map(|_| "a").collect();
+
+        advance(&mut terminal, &mut line, input.as_str()).unwrap();
+
+        assert_eq!(advance(&mut terminal, &mut line, "a"), Err(()));
+
+        assert_eq!(line.buffer.as_str(), input);
+
+        advance(&mut terminal, &mut line, Backspace).unwrap();
     }
 }

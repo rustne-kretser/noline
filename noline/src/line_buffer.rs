@@ -227,7 +227,7 @@ impl<const N: usize> Buffer for StaticBuffer<N> {
     fn remove_byte(&mut self, index: usize) -> u8 {
         let byte = self.array[index];
 
-        for i in index..self.len {
+        for i in index..(self.len - 1) {
             self.array[i] = self.array[i + 1];
         }
 
@@ -287,6 +287,17 @@ pub use self::alloc::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_buffer() {
+        let mut buf: StaticBuffer<20> = StaticBuffer::new();
+
+        for i in 0..20 {
+            buf.insert_byte(i, 0x30);
+        }
+
+        buf.remove_byte(19);
+    }
 
     fn insert_str<B: Buffer>(buf: &mut LineBuffer<B>, index: usize, s: &str) {
         buf.insert_str(index, s);
