@@ -1,3 +1,6 @@
+//! Error types
+
+/// Enum to hold various error types
 #[derive(Debug)]
 pub enum Error<RE, WE> {
     ParserError,

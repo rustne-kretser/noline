@@ -1,5 +1,187 @@
+//! Buffer to hold line.
+//!
+//! The line buffer comes in two default flavours:
+//!
+//! - [`StaticLineBuffer`] - A statically allocated buffer backed by a byte array.
+//! - [`AllocLineBuffer`] - A dynamically alloced buffer backed by a `Vec<u8>`. Requires feature `alloc` or `std`.
+
+use crate::utf8::Utf8Char;
 use core::{ops::Range, str::from_utf8_unchecked};
 
+/// Trait for defining underlying buffer
+pub trait Buffer: Default {
+    /// Return the current length of the buffer. This represents the
+    /// number of bytes currently in the buffer, not the capacity.
+    fn buffer_len(&self) -> usize;
+
+    /// Return buffer capacity or None if unbounded.
+    fn capacity(&self) -> Option<usize>;
+
+    /// Truncate buffer, setting lenght to 0.
+    fn truncate_buffer(&mut self, index: usize);
+
+    /// Insert byte at index
+    fn insert_byte(&mut self, index: usize, byte: u8);
+
+    /// Remove byte from index and return byte
+    fn remove_byte(&mut self, index: usize) -> u8;
+
+    /// Return byte slice into buffer from 0 up to buffer length.
+    fn as_slice(&self) -> &[u8];
+}
+
+/// High level interface to line buffer
+pub struct LineBuffer<B: Buffer> {
+    buf: B,
+}
+
+impl<B: Buffer> LineBuffer<B> {
+    /// Create new line buffer
+    pub fn new() -> Self {
+        Self { buf: B::default() }
+    }
+
+    /// Return buffer as bytes slice
+    pub fn as_slice(&self) -> &[u8] {
+        self.buf.as_slice()
+    }
+
+    /// Return buffer length
+    pub fn len(&self) -> usize {
+        self.buf.buffer_len()
+    }
+
+    /// Return buffer as string. The buffer should only hold a valid
+    /// UTF-8, so this function is infallible.
+    pub fn as_str(&self) -> &str {
+        // Pinky swear, it's only UTF-8!
+        unsafe { from_utf8_unchecked(self.as_slice()) }
+    }
+
+    fn char_ranges<'a>(&'a self) -> impl Iterator<Item = (Range<usize>, char)> + 'a {
+        let s = self.as_str();
+
+        s.char_indices()
+            .zip(
+                s.char_indices()
+                    .skip(1)
+                    .chain([(s.len(), '\0')].into_iter()),
+            )
+            .map(|((start, c), (end, _))| (start..end, c))
+    }
+
+    fn get_byte_position(&self, char_index: usize) -> usize {
+        let s = self.as_str();
+
+        s.char_indices()
+            .skip(char_index)
+            .map(|(pos, _)| pos)
+            .next()
+            .unwrap_or(s.len())
+    }
+
+    /// Delete character at character index.
+    pub fn delete(&mut self, char_index: usize) {
+        let mut ranges = self.char_ranges().skip(char_index);
+
+        if let Some((range, _)) = ranges.next() {
+            drop(ranges);
+
+            let pos = range.start;
+
+            for _ in range {
+                self.buf.remove_byte(pos);
+            }
+        }
+    }
+
+    /// Delete buffer after character index
+    pub fn delete_after_char(&mut self, char_index: usize) {
+        let pos = self.get_byte_position(char_index);
+
+        self.buf.truncate_buffer(pos);
+    }
+
+    /// Truncate buffer
+    pub fn truncate(&mut self) {
+        self.delete_after_char(0);
+    }
+
+    fn delete_range(&mut self, range: Range<usize>) {
+        let pos = range.start;
+        for _ in range {
+            self.buf.remove_byte(pos);
+        }
+    }
+
+    /// Delete previous word from character index
+    pub fn delete_previous_word(&mut self, char_index: usize) -> usize {
+        let mut word_start = 0;
+        let mut word_end = 0;
+
+        for (i, (range, c)) in self.char_ranges().enumerate().take(char_index) {
+            if c == ' ' && i < char_index - 1 {
+                word_start = range.end;
+            }
+
+            word_end = range.end;
+        }
+
+        let deleted = self.as_str()[word_start..word_end].chars().count();
+
+        self.delete_range(word_start..word_end);
+
+        deleted
+    }
+
+    /// Swap characters at index
+    pub fn swap_chars(&mut self, char_index: usize) {
+        let mut ranges = self.char_ranges().skip(char_index - 1);
+
+        if let Some((prev, _)) = ranges.next() {
+            if let Some((cur, _)) = ranges.next() {
+                drop(ranges);
+
+                for (remove, insert) in cur.zip((prev.start)..) {
+                    let byte = self.buf.remove_byte(remove);
+                    self.buf.insert_byte(insert, byte);
+                }
+            }
+        }
+    }
+
+    /// Insert UTF-8 char at position
+    pub fn insert_utf8_char(&mut self, char_index: usize, c: Utf8Char) -> Result<(), Utf8Char> {
+        let pos = self.get_byte_position(char_index);
+
+        if let Some(capacity) = self.buf.capacity() {
+            if c.as_bytes().len() > capacity - self.buf.buffer_len() {
+                return Err(c);
+            }
+        }
+
+        for (i, byte) in c.as_bytes().iter().enumerate() {
+            self.buf.insert_byte(pos + i, *byte);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn insert_str(&mut self, char_index: usize, s: &str) {
+        use ::std::string::ToString;
+
+        for (pos, c) in s
+            .chars()
+            .map(|c| Utf8Char::from_str(&c.to_string()))
+            .enumerate()
+        {
+            assert!(self.insert_utf8_char(char_index + pos, c).is_ok());
+        }
+    }
+}
+
+/// Static buffer backed by array
 pub struct StaticBuffer<const N: usize> {
     array: [u8; N],
     len: usize,
@@ -18,15 +200,6 @@ impl<const N: usize> Default for StaticBuffer<N> {
     fn default() -> Self {
         Self::new()
     }
-}
-
-pub trait Buffer: Default {
-    fn buffer_len(&self) -> usize;
-    fn capacity(&self) -> Option<usize>;
-    fn truncate_buffer(&mut self, index: usize);
-    fn insert_byte(&mut self, index: usize, byte: u8);
-    fn remove_byte(&mut self, index: usize) -> u8;
-    fn as_slice(&self) -> &[u8];
 }
 
 impl<const N: usize> Buffer for StaticBuffer<N> {
@@ -68,150 +241,15 @@ impl<const N: usize> Buffer for StaticBuffer<N> {
     }
 }
 
-pub struct LineBuffer<B: Buffer> {
-    buf: B,
-}
-
-impl<B: Buffer> LineBuffer<B> {
-    pub fn new() -> Self {
-        Self { buf: B::default() }
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        self.buf.as_slice()
-    }
-
-    pub fn len(&self) -> usize {
-        self.buf.buffer_len()
-    }
-
-    pub fn as_str(&self) -> &str {
-        unsafe { from_utf8_unchecked(self.as_slice()) }
-    }
-
-    fn char_ranges<'a>(&'a self) -> impl Iterator<Item = (Range<usize>, char)> + 'a {
-        let s = self.as_str();
-
-        s.char_indices()
-            .zip(
-                s.char_indices()
-                    .skip(1)
-                    .chain([(s.len(), '\0')].into_iter()),
-            )
-            .map(|((start, c), (end, _))| (start..end, c))
-    }
-
-    fn get_byte_position(&self, char_index: usize) -> usize {
-        let s = self.as_str();
-
-        s.char_indices()
-            .skip(char_index)
-            .map(|(pos, _)| pos)
-            .next()
-            .unwrap_or(s.len())
-    }
-
-    pub fn delete(&mut self, char_index: usize) {
-        let mut ranges = self.char_ranges().skip(char_index);
-
-        if let Some((range, _)) = ranges.next() {
-            drop(ranges);
-
-            let pos = range.start;
-
-            for _ in range {
-                self.buf.remove_byte(pos);
-            }
-        }
-    }
-
-    pub fn delete_after_char(&mut self, char_index: usize) {
-        let pos = self.get_byte_position(char_index);
-
-        self.buf.truncate_buffer(pos);
-    }
-
-    pub fn truncate(&mut self) {
-        self.delete_after_char(0);
-    }
-
-    fn delete_range(&mut self, range: Range<usize>) {
-        let pos = range.start;
-        for _ in range {
-            self.buf.remove_byte(pos);
-        }
-    }
-
-    pub fn delete_previous_word(&mut self, char_index: usize) -> usize {
-        let mut word_start = 0;
-        let mut word_end = 0;
-
-        for (i, (range, c)) in self.char_ranges().enumerate().take(char_index) {
-            if c == ' ' && i < char_index - 1 {
-                word_start = range.end;
-            }
-
-            word_end = range.end;
-        }
-
-        let deleted = self.as_str()[word_start..word_end].chars().count();
-
-        self.delete_range(word_start..word_end);
-
-        deleted
-    }
-
-    pub fn swap_chars(&mut self, char_index: usize) {
-        let mut ranges = self.char_ranges().skip(char_index - 1);
-
-        if let Some((prev, _)) = ranges.next() {
-            if let Some((cur, _)) = ranges.next() {
-                drop(ranges);
-
-                for (remove, insert) in cur.zip((prev.start)..) {
-                    let byte = self.buf.remove_byte(remove);
-                    self.buf.insert_byte(insert, byte);
-                }
-            }
-        }
-    }
-
-    pub fn insert_utf8_char(&mut self, char_index: usize, c: Utf8Char) -> Result<(), Utf8Char> {
-        let pos = self.get_byte_position(char_index);
-
-        if let Some(capacity) = self.buf.capacity() {
-            if c.as_bytes().len() > capacity - self.buf.buffer_len() {
-                return Err(c);
-            }
-        }
-
-        for (i, byte) in c.as_bytes().iter().enumerate() {
-            self.buf.insert_byte(pos + i, *byte);
-        }
-
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub fn insert_str(&mut self, char_index: usize, s: &str) {
-        use std::string::ToString;
-
-        for (pos, c) in s
-            .chars()
-            .map(|c| Utf8Char::from_str(&c.to_string()))
-            .enumerate()
-        {
-            assert!(self.insert_utf8_char(char_index + pos, c).is_ok());
-        }
-    }
-}
-
+/// Static line buffer
 pub type StaticLineBuffer<const N: usize> = LineBuffer<StaticBuffer<N>>;
 
-#[cfg(any(test, feature = "std"))]
-mod feature_std {
+#[cfg(any(test, feature = "alloc", feature = "std"))]
+mod alloc {
+    extern crate alloc;
+
+    use self::alloc::vec::Vec;
     use super::*;
-    use std::vec::Vec;
 
     impl Buffer for Vec<u8> {
         fn buffer_len(&self) -> usize {
@@ -239,13 +277,12 @@ mod feature_std {
         }
     }
 
+    /// Dynamically allocated line buffer
     pub type AllocLineBuffer = LineBuffer<Vec<u8>>;
 }
 
-#[cfg(any(test, feature = "std"))]
-pub use feature_std::*;
-
-use crate::utf8::Utf8Char;
+#[cfg(any(test, feature = "alloc", feature = "std"))]
+pub use self::alloc::*;
 
 #[cfg(test)]
 mod tests {

@@ -145,10 +145,6 @@ impl Terminal {
         self.position_from_offset(offset + steps)
     }
 
-    pub fn get_size(&self) -> (usize, usize) {
-        (self.rows, self.columns)
-    }
-
     pub fn columns_remaining(&self) -> usize {
         self.columns - self.cursor.column
     }

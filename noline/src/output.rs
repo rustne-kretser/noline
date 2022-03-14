@@ -45,7 +45,6 @@ pub enum OutputAction {
     MoveCursorBackAndPrintBufferAndMoveForward,
     MoveCursorAndEraseAndPrintBuffer(isize),
     RingBell,
-    PrintNewline,
     Done,
     Abort,
 }
@@ -487,7 +486,6 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                             )
                         }
                         OutputAction::RingBell => OutputState::OneStep([Bell].into_iter()),
-                        OutputAction::PrintNewline => OutputState::OneStep([Newline].into_iter()),
                         OutputAction::ClearAndPrintPrompt => OutputState::ThreeSteps(
                             [ClearLine, Print(self.prompt), GetPosition].into_iter(),
                         ),

@@ -1,9 +1,11 @@
-use core::marker::PhantomData;
+//! Core library containing the components for building an editor.
+//!
+//! Use [`Initializer`] to get [`crate::terminal::Terminal`] and then
+//! use [`Line`] to read a single line.
 
 use crate::input::{Action, ControlCharacter::*, Parser, CSI};
 use crate::line_buffer::Buffer;
 use crate::line_buffer::LineBuffer;
-use crate::marker::SyncAsync;
 use crate::output::CursorMove;
 use crate::output::{Output, OutputAction};
 use crate::terminal::{Cursor, Terminal};
@@ -17,34 +19,39 @@ pub enum InitializerResult<T> {
 }
 
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-pub(crate) enum NolineInitializerState {
+pub(crate) enum InitializerState {
     New,
     Position(Cursor),
     Done,
 }
 
-pub struct NolineInitializer<'a, B: Buffer, S: SyncAsync> {
-    pub(crate) state: NolineInitializerState,
+// Terminal initializer used to probe terminal size. To use, print
+// bytes return [`Initializer::init()'] to output and read bytes into
+// [`initializer::advance()`] until it ruturns item.
+pub struct Initializer {
+    pub(crate) state: InitializerState,
     parser: Parser,
-    pub(crate) prompt: &'a str,
-    _marker: PhantomData<(S, B)>,
 }
 
-impl<'a, B: Buffer, S: SyncAsync> NolineInitializer<'a, B, S> {
-    pub fn new(prompt: &'a str) -> Self {
+impl Initializer {
+    pub fn new() -> Self {
         Self {
-            state: NolineInitializerState::New,
+            state: InitializerState::New,
             parser: Parser::new(),
-            prompt,
-            _marker: PhantomData,
         }
     }
 
-    pub(crate) fn init(&self) -> &'static [u8] {
+    // Returns initialization bytes.
+    pub fn init() -> &'static [u8] {
+        // There is no command to request the size of the terminal window,
+        // so to probe the size we move the cursor way out of the screen
+        // and then request the position, because the cursor must be in
+        // the screen this gives us the size.
         "\r\x1b[J\x1b7\x1b[6n\x1b[999;999H\x1b[6n\x1b8".as_bytes()
     }
 
-    pub(crate) fn advance(&mut self, byte: u8) -> InitializerResult<Terminal> {
+    // Advance initializer by one byte
+    pub fn advance(&mut self, byte: u8) -> InitializerResult<Terminal> {
         let action = self.parser.advance(byte);
 
         #[cfg(test)]
@@ -52,18 +59,18 @@ impl<'a, B: Buffer, S: SyncAsync> NolineInitializer<'a, B, S> {
 
         match action {
             Action::ControlSequenceIntroducer(CSI::CPR(x, y)) => match self.state {
-                NolineInitializerState::New => {
-                    self.state = NolineInitializerState::Position(Cursor::new(x - 1, y - 1));
+                InitializerState::New => {
+                    self.state = InitializerState::Position(Cursor::new(x - 1, y - 1));
                     InitializerResult::Continue
                 }
-                NolineInitializerState::Position(pos) => {
+                InitializerState::Position(pos) => {
                     #[cfg(test)]
                     dbg!(pos, x, y);
 
-                    self.state = NolineInitializerState::Done;
+                    self.state = InitializerState::Done;
                     InitializerResult::Item(Terminal::new(x, y, pos))
                 }
-                NolineInitializerState::Done => InitializerResult::InvalidInput,
+                InitializerState::Done => InitializerResult::InvalidInput,
             },
             Action::Ignore => InitializerResult::Continue,
             _ => InitializerResult::InvalidInput,
@@ -71,26 +78,34 @@ impl<'a, B: Buffer, S: SyncAsync> NolineInitializer<'a, B, S> {
     }
 }
 
-pub struct Noline<'a, B: Buffer, S: SyncAsync> {
-    pub(crate) buffer: LineBuffer<B>,
-    terminal: Terminal,
+// State machine for reading single line.
+//
+// Provide input by calling [`Line::advance`], returning
+// [`crate::output::Output`] object, which
+//
+// Before reading line, call [`Line::reset`] to truncate buffer, clear
+// line, get cursor position and print prompt. Call [`Line::advance`]
+// for each byte read from input and print bytes from
+// [`crate::output::Output`] to output.
+pub struct Line<'a, B: Buffer> {
+    buffer: &'a mut LineBuffer<B>,
+    terminal: &'a mut Terminal,
     parser: Parser,
     prompt: &'a str,
-    _marker: PhantomData<S>,
 }
 
-impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
-    pub fn new(prompt: &'a str, terminal: Terminal) -> Self {
+impl<'a, B: Buffer> Line<'a, B> {
+    pub fn new(prompt: &'a str, buffer: &'a mut LineBuffer<B>, terminal: &'a mut Terminal) -> Self {
         Self {
-            buffer: LineBuffer::new(),
+            buffer,
             terminal,
             parser: Parser::new(),
             prompt,
-            _marker: PhantomData,
         }
     }
 
-    pub fn reset_line<'b>(&'b mut self) -> Output<'b, B> {
+    // Truncate buffer, clear line and print prompt
+    pub fn reset<'b>(&'b mut self) -> Output<'b, B> {
         self.buffer.truncate();
         self.generate_output(ClearAndPrintPrompt)
     }
@@ -104,7 +119,9 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
         pos - self.prompt.len()
     }
 
-    pub(crate) fn input_byte<'b>(&'b mut self, byte: u8) -> Output<'b, B> {
+    // Advance state machine by one byte. Returns output iterator over
+    // 0 or more byte slices.
+    pub(crate) fn advance<'b>(&'b mut self, byte: u8) -> Output<'b, B> {
         let action = self.parser.advance(byte);
 
         #[cfg(test)]
@@ -225,30 +242,86 @@ impl<'a, B: Buffer, S: SyncAsync> Noline<'a, B, S> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::mpsc::channel;
     use std::vec::Vec;
 
-    use crate::error::Error;
-    use crate::sync::{Noline, NolineInitializer};
     use crate::terminal::Cursor;
     use crate::testlib::{csi, AsByteVec, MockTerminal};
 
     use super::*;
 
+    struct Editor<B: Buffer> {
+        buffer: LineBuffer<B>,
+        terminal: Terminal,
+    }
+
+    impl<B: Buffer> Editor<B> {
+        fn new(term: &mut MockTerminal) -> Self {
+            let mut initializer = Initializer::new();
+
+            let terminal = Initializer::init()
+                .iter()
+                .map(|&b| term.advance(b))
+                .filter_map(|output| output.and_then(|x| Some(x.into_iter())))
+                .flatten()
+                .collect::<Vec<u8>>()
+                .into_iter()
+                .find_map(|b| match initializer.advance(b) {
+                    InitializerResult::Continue => None,
+                    InitializerResult::Item(terminal) => Some(terminal),
+                    InitializerResult::InvalidInput => unreachable!(),
+                })
+                .unwrap();
+
+            Self {
+                buffer: LineBuffer::new(),
+                terminal,
+            }
+        }
+
+        fn get_line<'b>(&'b mut self, prompt: &'b str, mockterm: &mut MockTerminal) -> Line<'b, B> {
+            let cursor = mockterm.get_cursor();
+            let mut line = Line::new(prompt, &mut self.buffer, &mut self.terminal);
+
+            let output: Vec<u8> = line
+                .reset()
+                .into_iter()
+                .filter_map(|item| {
+                    item.get_bytes()
+                        .and_then(|bytes| Some(bytes.iter().map(|&b| b).collect::<Vec<u8>>()))
+                })
+                .flatten()
+                .filter_map(|b| mockterm.advance(b))
+                .flatten()
+                .collect();
+
+            output.into_iter().for_each(|b| {
+                line.advance(b)
+                    .into_iter()
+                    .for_each(|output| assert!(output.get_bytes().is_none()))
+            });
+
+            assert_eq!(mockterm.screen_as_string(), prompt);
+            assert_eq!(mockterm.get_cursor(), Cursor::new(cursor.row, prompt.len()));
+
+            line
+        }
+    }
+
     fn advance<'a, B: Buffer>(
         terminal: &mut MockTerminal,
-        noline: &mut Noline<'a, B>,
+        noline: &mut Line<'a, B>,
         input: impl AsByteVec,
     ) -> core::result::Result<(), ()> {
         terminal.bell = false;
 
         for input in input.as_byte_vec() {
-            noline.advance::<_, (), ()>(input, |bytes| {
-                for output in bytes {
-                    terminal.advance(*output);
+            for item in noline.advance(input) {
+                if let Some(bytes) = item.get_bytes() {
+                    for &b in bytes {
+                        terminal.advance(b);
+                    }
                 }
-                Ok(())
-            });
+            }
         }
 
         assert_eq!(noline.terminal.get_cursor(), terminal.cursor);
@@ -262,88 +335,54 @@ pub(crate) mod tests {
         }
     }
 
-    fn get_terminal_and_noline<'a>(
-        prompt: &'a str,
+    fn get_terminal_and_editor<'a>(
         rows: usize,
         columns: usize,
         origin: Cursor,
-    ) -> (MockTerminal, Noline<'a, Vec<u8>>) {
-        let (tx, rx) = channel();
-
+    ) -> (MockTerminal, Editor<Vec<u8>>) {
         let mut terminal = MockTerminal::new(rows, columns, origin);
 
-        let mut noline = NolineInitializer::new(prompt)
-            .initialize(
-                || rx.try_recv().or_else(|_| Error::read_error(())),
-                |bytes| {
-                    for byte in bytes {
-                        if let Some(bytes) = terminal.advance(*byte) {
-                            for byte in bytes {
-                                tx.send(byte).or_else(|_| Error::write_error(()))?;
-                            }
-                        }
-                    }
+        let editor = Editor::new(&mut terminal);
 
-                    Ok(())
-                },
-            )
-            .unwrap();
+        assert_eq!(terminal.get_cursor(), origin);
 
-        assert!(rx.try_recv().is_err());
-
-        for item in noline.reset_line() {
-            match item {
-                crate::output::OutputItem::Slice(bytes) => {
-                    for byte in bytes {
-                        if let Some(bytes) = terminal.advance(*byte) {
-                            for byte in bytes {
-                                tx.send(byte).unwrap();
-                            }
-                        }
-                    }
-                }
-                _ => unreachable!(),
-            }
-        }
-
-        assert_eq!(terminal.get_cursor(), Cursor::new(origin.row, 2));
-        assert_eq!(terminal.screen_as_string(), prompt);
-
-        (terminal, noline)
+        (terminal, editor)
     }
 
     #[test]
     fn movecursor() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 4, 10, Cursor::new(1, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 10, Cursor::new(1, 0));
 
-        advance(&mut terminal, &mut noline, "Hello, World!").unwrap();
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        advance(&mut terminal, &mut line, "Hello, World!").unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(2, 5));
 
-        advance(&mut terminal, &mut noline, [csi::LEFT; 6]).unwrap();
+        advance(&mut terminal, &mut line, [csi::LEFT; 6]).unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 9));
 
-        advance(&mut terminal, &mut noline, CtrlA).unwrap();
+        advance(&mut terminal, &mut line, CtrlA).unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 2));
 
-        assert!(advance(&mut terminal, &mut noline, csi::LEFT).is_err());
+        assert!(advance(&mut terminal, &mut line, csi::LEFT).is_err());
 
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 2));
 
-        advance(&mut terminal, &mut noline, CtrlE).unwrap();
+        advance(&mut terminal, &mut line, CtrlE).unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(2, 5));
 
-        assert!(advance(&mut terminal, &mut noline, csi::RIGHT).is_err());
+        assert!(advance(&mut terminal, &mut line, csi::RIGHT).is_err());
 
         assert_eq!(terminal.get_cursor(), Cursor::new(2, 5));
 
-        advance(&mut terminal, &mut noline, csi::HOME).unwrap();
+        advance(&mut terminal, &mut line, csi::HOME).unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 2));
 
-        advance(&mut terminal, &mut noline, csi::END).unwrap();
+        advance(&mut terminal, &mut line, csi::END).unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(2, 5));
     }
@@ -351,22 +390,26 @@ pub(crate) mod tests {
     #[test]
     fn cursor_scroll() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 4, 10, Cursor::new(3, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 10, Cursor::new(3, 0));
 
-        advance(&mut terminal, &mut noline, "23456789").unwrap();
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        advance(&mut terminal, &mut line, "23456789").unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(3, 0));
     }
 
     #[test]
     fn clear_line() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 4, 20, Cursor::new(1, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 20, Cursor::new(1, 0));
 
-        advance(&mut terminal, &mut noline, "Hello, World!").unwrap();
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        advance(&mut terminal, &mut line, "Hello, World!").unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 15));
         assert_eq!(terminal.screen_as_string(), "> Hello, World!");
 
-        advance(&mut terminal, &mut noline, CtrlU).unwrap();
+        advance(&mut terminal, &mut line, CtrlU).unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 2));
         assert_eq!(terminal.screen_as_string(), "> ");
     }
@@ -374,13 +417,15 @@ pub(crate) mod tests {
     #[test]
     fn clear_screen() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 4, 20, Cursor::new(1, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 20, Cursor::new(1, 0));
 
-        advance(&mut terminal, &mut noline, "Hello, World!").unwrap();
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        advance(&mut terminal, &mut line, "Hello, World!").unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 15));
         assert_eq!(terminal.screen_as_string(), "> Hello, World!");
 
-        advance(&mut terminal, &mut noline, CtrlL).unwrap();
+        advance(&mut terminal, &mut line, CtrlL).unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 2));
         assert_eq!(terminal.screen_as_string(), "> ");
     }
@@ -388,12 +433,14 @@ pub(crate) mod tests {
     #[test]
     fn scroll() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 4, 10, Cursor::new(0, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 10, Cursor::new(0, 0));
 
-        advance(&mut terminal, &mut noline, "aaaaaaaa").unwrap();
-        advance(&mut terminal, &mut noline, "bbbbbbbbbb").unwrap();
-        advance(&mut terminal, &mut noline, "cccccccccc").unwrap();
-        advance(&mut terminal, &mut noline, "ddddddddd").unwrap();
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        advance(&mut terminal, &mut line, "aaaaaaaa").unwrap();
+        advance(&mut terminal, &mut line, "bbbbbbbbbb").unwrap();
+        advance(&mut terminal, &mut line, "cccccccccc").unwrap();
+        advance(&mut terminal, &mut line, "ddddddddd").unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(3, 9));
 
@@ -402,7 +449,7 @@ pub(crate) mod tests {
             "> aaaaaaaa\nbbbbbbbbbb\ncccccccccc\nddddddddd"
         );
 
-        advance(&mut terminal, &mut noline, "d").unwrap();
+        advance(&mut terminal, &mut line, "d").unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(3, 0));
 
@@ -411,7 +458,7 @@ pub(crate) mod tests {
             "bbbbbbbbbb\ncccccccccc\ndddddddddd"
         );
 
-        advance(&mut terminal, &mut noline, "eeeeeeeeee").unwrap();
+        advance(&mut terminal, &mut line, "eeeeeeeeee").unwrap();
 
         assert_eq!(
             terminal.screen_as_string(),
@@ -437,51 +484,55 @@ pub(crate) mod tests {
     #[test]
     fn swap() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 4, 10, Cursor::new(0, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 10, Cursor::new(0, 0));
 
-        advance(&mut terminal, &mut noline, "æøå").unwrap();
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        advance(&mut terminal, &mut line, "æøå").unwrap();
         assert_eq!(terminal.screen_as_string(), "> æøå");
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 5));
 
-        assert!(advance(&mut terminal, &mut noline, CtrlT).is_err());
+        assert!(advance(&mut terminal, &mut line, CtrlT).is_err());
 
         assert_eq!(terminal.screen_as_string(), "> æøå");
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 5));
 
-        advance(&mut terminal, &mut noline, csi::LEFT).unwrap();
+        advance(&mut terminal, &mut line, csi::LEFT).unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 4));
 
-        advance(&mut terminal, &mut noline, CtrlT).unwrap();
+        advance(&mut terminal, &mut line, CtrlT).unwrap();
 
-        assert_eq!(noline.buffer.as_str(), "æåø");
+        assert_eq!(line.buffer.as_str(), "æåø");
         assert_eq!(terminal.screen_as_string(), "> æåø");
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 4));
 
-        advance(&mut terminal, &mut noline, CtrlA).unwrap();
+        advance(&mut terminal, &mut line, CtrlA).unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 2));
 
-        assert!(advance(&mut terminal, &mut noline, CtrlT).is_err());
+        assert!(advance(&mut terminal, &mut line, CtrlT).is_err());
         assert_eq!(terminal.screen_as_string(), "> æåø");
     }
 
     #[test]
     fn erase_after_cursor() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 4, 10, Cursor::new(0, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 10, Cursor::new(0, 0));
 
-        advance(&mut terminal, &mut noline, "rm -rf /").unwrap();
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        advance(&mut terminal, &mut line, "rm -rf /").unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 0));
         assert_eq!(terminal.screen_as_string(), "> rm -rf /");
 
-        advance(&mut terminal, &mut noline, CtrlA).unwrap();
-        advance(&mut terminal, &mut noline, [CtrlF; 3]).unwrap();
+        advance(&mut terminal, &mut line, CtrlA).unwrap();
+        advance(&mut terminal, &mut line, [CtrlF; 3]).unwrap();
 
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 5));
 
-        advance(&mut terminal, &mut noline, CtrlK).unwrap();
-        assert_eq!(noline.buffer.as_str(), "rm ");
+        advance(&mut terminal, &mut line, CtrlK).unwrap();
+        assert_eq!(line.buffer.as_str(), "rm ");
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 5));
         assert_eq!(terminal.screen_as_string(), "> rm ");
     }
@@ -489,19 +540,21 @@ pub(crate) mod tests {
     #[test]
     fn delete_previous_word() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 1, 40, Cursor::new(0, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(1, 40, Cursor::new(0, 0));
 
-        advance(&mut terminal, &mut noline, "rm file1 file2 file3").unwrap();
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        advance(&mut terminal, &mut line, "rm file1 file2 file3").unwrap();
         assert_eq!(terminal.screen_as_string(), "> rm file1 file2 file3");
 
-        advance(&mut terminal, &mut noline, [CtrlB; 5]).unwrap();
+        advance(&mut terminal, &mut line, [CtrlB; 5]).unwrap();
 
-        advance(&mut terminal, &mut noline, CtrlW).unwrap();
+        advance(&mut terminal, &mut line, CtrlW).unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 11));
-        assert_eq!(noline.buffer.as_str(), "rm file1 file3");
+        assert_eq!(line.buffer.as_str(), "rm file1 file3");
         assert_eq!(terminal.screen_as_string(), "> rm file1 file3");
 
-        advance(&mut terminal, &mut noline, CtrlW).unwrap();
+        advance(&mut terminal, &mut line, CtrlW).unwrap();
         assert_eq!(terminal.screen_as_string(), "> rm file3");
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 5));
     }
@@ -509,59 +562,63 @@ pub(crate) mod tests {
     #[test]
     fn delete() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 1, 40, Cursor::new(0, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(1, 40, Cursor::new(0, 0));
+
+        let mut line = editor.get_line(prompt, &mut terminal);
 
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 2));
         assert_eq!(terminal.screen_as_string(), "> ");
-        advance(&mut terminal, &mut noline, "abcde").unwrap();
+        advance(&mut terminal, &mut line, "abcde").unwrap();
 
-        advance(&mut terminal, &mut noline, CtrlD).unwrap_err();
+        advance(&mut terminal, &mut line, CtrlD).unwrap_err();
 
-        advance(&mut terminal, &mut noline, CtrlA).unwrap();
+        advance(&mut terminal, &mut line, CtrlA).unwrap();
 
-        advance(&mut terminal, &mut noline, CtrlD).unwrap();
-        assert_eq!(noline.buffer.as_str(), "bcde");
+        advance(&mut terminal, &mut line, CtrlD).unwrap();
+        assert_eq!(line.buffer.as_str(), "bcde");
         assert_eq!(terminal.screen_as_string(), "> bcde");
 
-        advance(&mut terminal, &mut noline, [csi::RIGHT; 3]).unwrap();
-        advance(&mut terminal, &mut noline, CtrlD).unwrap();
-        assert_eq!(noline.buffer.as_str(), "bcd");
+        advance(&mut terminal, &mut line, [csi::RIGHT; 3]).unwrap();
+        advance(&mut terminal, &mut line, CtrlD).unwrap();
+        assert_eq!(line.buffer.as_str(), "bcd");
         assert_eq!(terminal.screen_as_string(), "> bcd");
 
-        advance(&mut terminal, &mut noline, CtrlD).unwrap_err();
+        advance(&mut terminal, &mut line, CtrlD).unwrap_err();
 
-        advance(&mut terminal, &mut noline, CtrlA).unwrap();
+        advance(&mut terminal, &mut line, CtrlA).unwrap();
 
-        advance(&mut terminal, &mut noline, csi::DELETE).unwrap();
-        assert_eq!(noline.buffer.as_str(), "cd");
+        advance(&mut terminal, &mut line, csi::DELETE).unwrap();
+        assert_eq!(line.buffer.as_str(), "cd");
         assert_eq!(terminal.screen_as_string(), "> cd");
 
-        advance(&mut terminal, &mut noline, csi::DELETE).unwrap();
-        assert_eq!(noline.buffer.as_str(), "d");
+        advance(&mut terminal, &mut line, csi::DELETE).unwrap();
+        assert_eq!(line.buffer.as_str(), "d");
         assert_eq!(terminal.screen_as_string(), "> d");
     }
 
     #[test]
     fn backspace() {
         let prompt = "> ";
-        let (mut terminal, mut noline) = get_terminal_and_noline(prompt, 1, 40, Cursor::new(0, 0));
+        let (mut terminal, mut editor) = get_terminal_and_editor(1, 40, Cursor::new(0, 0));
 
-        assert!(advance(&mut terminal, &mut noline, Backspace).is_err());
+        let mut line = editor.get_line(prompt, &mut terminal);
+
+        assert!(advance(&mut terminal, &mut line, Backspace).is_err());
 
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 2));
         assert_eq!(terminal.screen_as_string(), "> ");
-        advance(&mut terminal, &mut noline, "hello").unwrap();
+        advance(&mut terminal, &mut line, "hello").unwrap();
 
-        advance(&mut terminal, &mut noline, Backspace).unwrap();
-        assert_eq!(noline.buffer.as_str(), "hell");
+        advance(&mut terminal, &mut line, Backspace).unwrap();
+        assert_eq!(line.buffer.as_str(), "hell");
         assert_eq!(terminal.screen_as_string(), "> hell");
 
-        advance(&mut terminal, &mut noline, [csi::LEFT; 2]).unwrap();
-        advance(&mut terminal, &mut noline, Backspace).unwrap();
-        assert_eq!(noline.buffer.as_str(), "hll");
+        advance(&mut terminal, &mut line, [csi::LEFT; 2]).unwrap();
+        advance(&mut terminal, &mut line, Backspace).unwrap();
+        assert_eq!(line.buffer.as_str(), "hll");
         assert_eq!(terminal.screen_as_string(), "> hll");
 
-        advance(&mut terminal, &mut noline, CtrlA).unwrap();
-        advance(&mut terminal, &mut noline, Backspace).unwrap_err();
+        advance(&mut terminal, &mut line, CtrlA).unwrap();
+        advance(&mut terminal, &mut line, Backspace).unwrap_err();
     }
 }
