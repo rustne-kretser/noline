@@ -36,6 +36,8 @@ jobs:
       run: cargo outdated --exit-code 1
     - name: Format
       run: cargo fmt --all -- --check
+    - name: Doc
+      run: cargo doc --verbose --all-features
     - name: Build
       run: cargo build --verbose --all-features
     - name: Run tests

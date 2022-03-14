@@ -26,10 +26,6 @@
 //!   - [`sync::embedded::IO`]
 //! - [`no_sync::tokio::Editor`]
 //!
-//! # Feature flags
-//!
-//! All features are enabled by default
-//!
 //! # Example
 //! ```no_run
 //! use noline::sync::{std::IO, Editor};

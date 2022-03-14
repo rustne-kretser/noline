@@ -203,7 +203,7 @@ mod tests {
 
 #[cfg(any(test, feature = "std"))]
 pub mod std {
-    //! IO implementation for `std`
+    //! IO implementation for `std`. Requires feature `std`.
 
     use super::*;
 
@@ -409,7 +409,7 @@ pub mod std {
 
 #[cfg(any(test, feature = "embedded"))]
 pub mod embedded {
-    //! Implementation for embedded systems
+    //! Implementation for embedded systems. Requires feature `embedded`.
 
     use core::{
         fmt,
