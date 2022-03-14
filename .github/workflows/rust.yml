@@ -1,0 +1,75 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./noline
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions-rs/install@v0.1
+      with:
+        crate: cargo-readme
+        version: latest
+        use-tool-cache: true
+    - uses: actions-rs/install@v0.1
+      with:
+        crate: cargo-outdated
+        version: latest
+        use-tool-cache: true
+    - name: Readme
+      run: cargo readme > ../README.md && git diff --exit-code
+    - name: Outdated dependencies
+      run: cargo outdated --exit-code 1
+    - name: Format
+      run: cargo fmt --all -- --check
+    - name: Build
+      run: cargo build --verbose --all-features
+    - name: Run tests
+      run: cargo test --verbose --all-features
+
+  examples-std:
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./examples/std
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      run: cargo build --verbose
+
+  examples-stm32f103:
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./examples/no_std/bluepill
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: thumbv7m-none-eabi
+
+    - name: Build
+      run: cargo build --verbose
