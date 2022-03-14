@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  noline:
 
     runs-on: ubuntu-latest
 
@@ -60,7 +60,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: ./examples/no_std/bluepill
+        working-directory: ./examples/no_std/stm32f103
 
     steps:
     - uses: actions/checkout@v2

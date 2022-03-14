@@ -1,19 +1,18 @@
-use crate::common;
-use crate::error::Error;
-use crate::line_buffer::Buffer;
-use crate::marker::Async;
-use crate::output::OutputItem;
+//! Line editor for async IO
 
-pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Async>;
-type Noline<'a, B> = common::Noline<'a, B, Async>;
-
-#[cfg(feature = "tokio")]
-pub mod with_tokio {
+#[cfg(any(test, doc, feature = "tokio"))]
+pub mod tokio {
     //! Implementation for tokio
 
-    use super::*;
+    use crate::{
+        core::{Initializer, InitializerResult, Line},
+        error::Error,
+        line_buffer::{Buffer, LineBuffer},
+        output::OutputItem,
+        terminal::Terminal,
+    };
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use ::tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn write<W: AsyncWriteExt + Unpin>(
         stdout: &mut W,
@@ -45,51 +44,52 @@ pub mod with_tokio {
             .or_else(|err| Error::read_error(err))?)
     }
 
-    /// Async line editor for the `tokio` async runtime.
-    pub struct Editor<'a, B>
-    where
-        B: Buffer,
-    {
-        noline: Noline<'a, B>,
+    // Line editor for async IO
+    pub struct Editor<B: Buffer> {
+        buffer: LineBuffer<B>,
+        terminal: Terminal,
     }
 
-    impl<'a, B> Editor<'a, B>
+    impl<B> Editor<B>
     where
         B: Buffer,
     {
         /// Create and initialize line editor
         pub async fn new<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
-            prompt: &'a str,
             stdin: &mut R,
             stdout: &mut W,
-        ) -> Result<Editor<'a, B>, Error<std::io::Error, std::io::Error>> {
-            let mut initializer = NolineInitializer::<B>::new(prompt);
+        ) -> Result<Editor<B>, Error<std::io::Error, std::io::Error>> {
+            let mut initializer = Initializer::new();
 
-            write(stdout, initializer.init()).await?;
+            write(stdout, Initializer::init()).await?;
             flush(stdout).await?;
 
             let terminal = loop {
                 let byte = read(stdin).await?;
 
                 match initializer.advance(byte) {
-                    common::InitializerResult::Continue => (),
-                    common::InitializerResult::Item(terminal) => break terminal,
-                    common::InitializerResult::InvalidInput => return Err(Error::ParserError),
+                    InitializerResult::Continue => (),
+                    InitializerResult::Item(terminal) => break terminal,
+                    InitializerResult::InvalidInput => return Err(Error::ParserError),
                 }
             };
 
-            Ok(Editor {
-                noline: Noline::new(prompt, terminal),
+            Ok(Self {
+                buffer: LineBuffer::new(),
+                terminal,
             })
         }
 
         /// Read line from `stdin`
         pub async fn readline<'b, W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
             &'b mut self,
+            prompt: &str,
             stdin: &mut R,
             stdout: &mut W,
         ) -> Result<&'b str, Error<std::io::Error, std::io::Error>> {
-            for output in self.noline.reset_line() {
+            let mut line = Line::new(prompt, &mut self.buffer, &mut self.terminal);
+
+            for output in line.reset() {
                 write(stdout, output.get_bytes().unwrap_or_else(|| unreachable!())).await?;
             }
 
@@ -98,7 +98,7 @@ pub mod with_tokio {
             let end_of_string = 'outer: loop {
                 let b = read(stdin).await?;
 
-                for item in self.noline.input_byte(b) {
+                for item in line.advance(b) {
                     if let Some(bytes) = item.get_bytes() {
                         write(stdout, bytes).await?;
                     }
@@ -116,7 +116,7 @@ pub mod with_tokio {
             flush(stdout).await?;
 
             if end_of_string {
-                Ok(self.noline.buffer.as_str())
+                Ok(self.buffer.as_str())
             } else {
                 Err(Error::Aborted)
             }

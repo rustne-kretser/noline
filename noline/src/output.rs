@@ -45,7 +45,6 @@ pub enum OutputAction {
     MoveCursorBackAndPrintBufferAndMoveForward,
     MoveCursorAndEraseAndPrintBuffer(isize),
     RingBell,
-    PrintNewline,
     Done,
     Abort,
 }
@@ -487,7 +486,6 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                             )
                         }
                         OutputAction::RingBell => OutputState::OneStep([Bell].into_iter()),
-                        OutputAction::PrintNewline => OutputState::OneStep([Newline].into_iter()),
                         OutputAction::ClearAndPrintPrompt => OutputState::ThreeSteps(
                             [ClearLine, Print(self.prompt), GetPosition].into_iter(),
                         ),
@@ -541,8 +539,6 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
 #[cfg(test)]
 mod tests {
     use std::string::String;
-
-    use crate::line_buffer::AllocLineBuffer;
 
     use super::*;
 
@@ -685,7 +681,7 @@ mod tests {
         }
 
         let prompt = "> ";
-        let mut line_buffer = AllocLineBuffer::new();
+        let mut line_buffer = LineBuffer::<Vec<u8>>::new();
         let mut terminal = Terminal::new(4, 10, Cursor::new(0, 0));
 
         let result = to_string(Output::new(

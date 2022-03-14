@@ -7,7 +7,11 @@
 #![no_std]
 
 use heapless::spsc::{Consumer, Producer, Queue};
-use noline::{error::Error, line_buffer::StaticBuffer, sync::embedded::Editor};
+use noline::{
+    error::Error,
+    line_buffer::StaticBuffer,
+    sync::{embedded::IO, Editor},
+};
 use panic_halt as _;
 
 use cortex_m::asm;
@@ -123,11 +127,11 @@ fn main() -> ! {
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::USART3);
     }
 
-    let mut wrapper = SerialWrapper::new(tx, rx_consumer);
+    let mut io = IO::new(SerialWrapper::new(tx, rx_consumer));
 
     let prompt = "> ";
-    let mut editor: Editor<StaticBuffer<128>> = loop {
-        match Editor::new(prompt, &mut wrapper) {
+    let mut editor: Editor<StaticBuffer<128>, _> = loop {
+        match Editor::new(&mut io) {
             Ok(editor) => break editor,
             Err(err) => {
                 let error = match err {
@@ -137,7 +141,7 @@ fn main() -> ! {
                     Error::WriteError(_) => "WriteError",
                 };
 
-                writeln!(wrapper.tx, "Failed: {}\r", error).unwrap();
+                writeln!(io, "Failed: {}\r", error).unwrap();
 
                 loop {
                     asm::nop();
@@ -147,9 +151,9 @@ fn main() -> ! {
     };
 
     loop {
-        match editor.readline(&mut wrapper) {
+        match editor.readline(prompt, &mut io) {
             Ok(s) => {
-                writeln!(wrapper.tx, "Echo: {}\r", s).unwrap();
+                writeln!(io, "Echo: {}\r", s).unwrap();
             }
             Err(err) => {
                 let error = match err {
@@ -159,7 +163,7 @@ fn main() -> ! {
                     Error::WriteError(_) => "WriteError",
                 };
 
-                writeln!(wrapper.tx, "Failed: {}\r", error).unwrap();
+                writeln!(io, "Failed: {}\r", error).unwrap();
             }
         }
     }

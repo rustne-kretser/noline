@@ -1,192 +1,293 @@
+//! Line editor for synchronous IO.
+//!
+//! The editor takes a struct implementing the [`Read`] and [`Write`]
+//! traits. There are ready made implementations in [`std::IO`] and [`embedded::IO`].
+
+use ::core::marker::PhantomData;
+
 use crate::error::Error;
-use crate::line_buffer::Buffer;
-use crate::marker::Sync;
+use crate::line_buffer::{Buffer, LineBuffer};
 
-use crate::common;
+use crate::core::{Initializer, InitializerResult, Line};
 use crate::output::{Output, OutputItem};
+use crate::terminal::Terminal;
 
-/// Initializer for synchronous line editor
-pub type NolineInitializer<'a, B> = common::NolineInitializer<'a, B, Sync>;
+/// Trait for reading bytes from input
+pub trait Read {
+    type Error;
 
-impl<'a, B: Buffer> NolineInitializer<'a, B> {
-    /// Initialize terminal returning [`Noline`] or error
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - A closure that reads one byte from input
-    /// * `output` - A closure that takes a bytes slice and writes it to output
-    pub fn initialize<IE, OE>(
-        mut self,
-        mut input: impl FnMut() -> Result<u8, Error<IE, OE>>,
-        mut output: impl FnMut(&'a [u8]) -> Result<(), Error<IE, OE>>,
-    ) -> Result<Noline<'a, B>, Error<IE, OE>> {
-        output(self.init())?;
+    // Read single byte from input
+    fn read(&mut self) -> Result<u8, Self::Error>;
+}
+
+/// Trait for writing bytes to output
+pub trait Write {
+    type Error;
+
+    /// Write byte slice to output
+    fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
+
+    // Flush output
+    fn flush(&mut self) -> Result<(), Self::Error>;
+}
+
+/// Line editor for synchronous IO
+pub struct Editor<B: Buffer, IO: Read + Write> {
+    buffer: LineBuffer<B>,
+    terminal: Terminal,
+    _marker: PhantomData<IO>,
+}
+
+impl<B, IO, RE, WE> Editor<B, IO>
+where
+    B: Buffer,
+    IO: Read<Error = RE> + Write<Error = WE>,
+{
+    /// Create and initialize line editor
+    pub fn new(io: &mut IO) -> Result<Self, Error<RE, WE>> {
+        let mut initializer = Initializer::new();
+
+        io.write(Initializer::init())
+            .or_else(|err| Error::write_error(err))?;
+        io.flush().or_else(|err| Error::write_error(err))?;
 
         let terminal = loop {
-            let byte = input()?;
+            let byte = io.read().or_else(|err| Error::read_error(err))?;
 
-            match self.advance(byte) {
-                common::InitializerResult::Continue => (),
-                common::InitializerResult::Item(terminal) => break terminal,
-                common::InitializerResult::InvalidInput => return Err(Error::ParserError),
+            match initializer.advance(byte) {
+                InitializerResult::Continue => (),
+                InitializerResult::Item(terminal) => break terminal,
+                InitializerResult::InvalidInput => return Err(Error::ParserError),
             }
         };
 
-        Ok(Noline::new(self.prompt, terminal))
+        Ok(Self {
+            buffer: LineBuffer::new(),
+            terminal,
+            _marker: PhantomData,
+        })
     }
-}
 
-/// Helper struct for building synchronous line editors
-pub type Noline<'a, B> = common::Noline<'a, B, Sync>;
-
-impl<'a, B: Buffer> Noline<'a, B> {
-    fn handle_ouput<'b, F, IE, OE>(
-        output: Output<'b, B>,
-        mut f: F,
-    ) -> Option<Result<(), Error<IE, OE>>>
-    where
-        F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
-    {
+    fn handle_output<'b>(output: Output<'b, B>, io: &mut IO) -> Result<Option<()>, Error<RE, WE>> {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
-                if let Err(err) = f(bytes) {
-                    return Some(Err(err));
-                }
+                io.write(bytes).or_else(|err| Error::write_error(err))?;
             }
 
+            io.flush().or_else(|err| Error::write_error(err))?;
+
             match item {
-                OutputItem::EndOfString => return Some(Ok(())),
-                OutputItem::Abort => return Some(Err(Error::Aborted)),
+                OutputItem::EndOfString => return Ok(Some(())),
+                OutputItem::Abort => return Err(Error::Aborted),
                 _ => (),
             }
         }
 
-        None
+        Ok(None)
     }
 
-    /// Clear line and print prompt
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that takes a bytes slice and writes it to output
-    pub fn reset<'b, F, IE, OE>(&'b mut self, f: F) -> Result<(), Error<IE, OE>>
-    where
-        F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
-    {
-        if let Some(res) = Self::handle_ouput(self.reset_line(), f) {
-            res?;
+    /// Read line from `stdin`
+    pub fn readline<'b>(
+        &'b mut self,
+        prompt: &'b str,
+        io: &mut IO,
+    ) -> Result<&'b str, Error<RE, WE>> {
+        let mut line = Line::new(prompt, &mut self.buffer, &mut self.terminal);
+        Self::handle_output(line.reset(), io)?;
+
+        loop {
+            let byte = io.read().or_else(|err| Error::read_error(err))?;
+            if Self::handle_output(line.advance(byte), io)?.is_some() {
+                break;
+            }
         }
 
-        Ok(())
-    }
-
-    /// Input byte and advance state machine
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that takes a bytes slice and writes it to
-    ///         output. Is only called if there's any output.
-    pub fn advance<'b, F, IE, OE>(
-        &'b mut self,
-        input: u8,
-        f: F,
-    ) -> Option<Result<(), Error<IE, OE>>>
-    where
-        F: FnMut(&[u8]) -> Result<(), Error<IE, OE>>,
-    {
-        Self::handle_ouput(self.input_byte(input), f)
+        Ok(self.buffer.as_str())
     }
 }
 
-#[cfg(any(test, feature = "std"))]
-pub mod with_std {
-    //! Implementation for `std`
-
+#[cfg(test)]
+mod tests {
     use super::*;
-    use std::io::Read;
-    use std::io::Write;
+    use ::std::string::ToString;
+    use ::std::{thread, vec::Vec};
+    use crossbeam::channel::{unbounded, Receiver, Sender};
 
-    /// Line editor for `std` systems. Generic over [`std::io::Read`]
-    /// and [`std::io::Write`].
-    pub struct Editor<'a, B>
-    where
-        B: Buffer,
-    {
-        noline: Noline<'a, B>,
+    struct IO {
+        input: Receiver<u8>,
+        buffer: Vec<u8>,
+        output: Sender<u8>,
     }
 
-    fn output_closure<'b, W: Write>(
-        stdout: &'b mut W,
-    ) -> impl FnMut(&[u8]) -> Result<(), Error<std::io::Error, std::io::Error>> + 'b {
-        |bytes| {
-            stdout
-                .write_all(bytes)
-                .or_else(|err| Error::write_error(err))?;
-            stdout.flush().or_else(|err| Error::write_error(err))?;
+    impl IO {
+        fn new(input: Receiver<u8>, output: Sender<u8>) -> Self {
+            Self {
+                input,
+                buffer: Vec::new(),
+                output,
+            }
+        }
+    }
+
+    impl Write for IO {
+        type Error = ();
+
+        fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+            dbg!(buf);
+            self.buffer.extend(buf.iter());
+
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            for b in self.buffer.drain(0..) {
+                self.output.send(b).unwrap();
+            }
+
             Ok(())
         }
     }
 
-    impl<'a, B> Editor<'a, B>
-    where
-        B: Buffer,
-    {
-        /// Create and initialize editor
-        pub fn new<W: Write, R: Read>(
-            prompt: &'a str,
-            stdin: &mut R,
-            stdout: &mut W,
-        ) -> Result<Self, Error<std::io::Error, std::io::Error>> {
-            let noline = NolineInitializer::new(prompt).initialize(
-                || {
-                    let b = stdin
-                        .bytes()
-                        .next()
-                        .unwrap_or_else(|| unreachable!())
-                        .or_else(|err| Error::read_error(err))?;
-                    Ok(b)
-                },
-                output_closure(stdout),
-            )?;
+    impl Read for IO {
+        type Error = ();
 
-            Ok(Self { noline })
+        fn read(&mut self) -> Result<u8, Self::Error> {
+            Ok(self.input.recv().or_else(|_| Err(()))?)
+        }
+    }
+
+    #[test]
+    fn editor() {
+        let (input_tx, input_rx) = unbounded();
+        let (output_tx, output_rx) = unbounded();
+
+        let mut io = IO::new(input_rx, output_tx);
+
+        let handle = thread::spawn(move || {
+            let mut editor: Editor<Vec<u8>, _> = Editor::new(&mut io).unwrap();
+
+            if let Ok(s) = editor.readline("> ", &mut io) {
+                Some(s.to_string())
+            } else {
+                None
+            }
+        });
+
+        for &b in Initializer::init() {
+            dbg!(b);
+            assert_eq!(
+                output_rx.recv_timeout(::core::time::Duration::from_millis(1000)),
+                Ok(b)
+            );
         }
 
-        /// Read line from `stdin`
-        pub fn readline<'b, W: Write, R: Read>(
-            &'b mut self,
-            stdin: &mut R,
-            stdout: &mut W,
-        ) -> Result<&'b str, Error<std::io::Error, std::io::Error>> {
-            let mut f = output_closure(stdout);
-            self.noline.reset(&mut f)?;
+        for &b in "\x1b[1;1R\x1b[20;80R".as_bytes() {
+            input_tx.send(b).unwrap();
+        }
 
-            loop {
-                let byte = stdin
-                    .bytes()
-                    .next()
-                    .unwrap_or_else(|| unreachable!())
-                    .or_else(|err| Error::read_error(err))?;
-                match self.noline.advance(byte, &mut f) {
-                    Some(rc) => {
-                        rc?;
+        for &b in "\r\x1b[J> \x1b[6n".as_bytes() {
+            dbg!(b);
+            assert_eq!(
+                output_rx.recv_timeout(::core::time::Duration::from_millis(1000)),
+                Ok(b)
+            );
+        }
 
-                        break Ok(self.noline.buffer.as_str());
-                    }
-                    None => (),
-                }
-            }
+        for &b in "abc\r".as_bytes() {
+            input_tx.send(b).unwrap();
+        }
+
+        assert_eq!(handle.join().unwrap(), Some("abc".to_string()));
+    }
+}
+
+#[cfg(any(test, feature = "std"))]
+pub mod std {
+    //! IO implementation for `std`
+
+    use super::*;
+
+    use ::std::io;
+    use core::fmt;
+
+    /// IO wrapper for stdin and stdout
+
+    pub struct IO<R, W>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        input: R,
+        output: W,
+    }
+
+    impl<R, W> IO<R, W>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        /// Create IO wrapper from input and output
+        pub fn new(input: R, output: W) -> Self {
+            Self { input, output }
+        }
+
+        /// Consume wrapper and return input and output as tuple
+        pub fn take(self) -> (R, W) {
+            (self.input, self.output)
+        }
+    }
+
+    impl<R, W> Read for IO<R, W>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        type Error = std::io::Error;
+
+        fn read(&mut self) -> Result<u8, Self::Error> {
+            let mut buf = [0];
+            self.input.read_exact(&mut buf)?;
+
+            Ok(buf[0])
+        }
+    }
+
+    impl<R, W> Write for IO<R, W>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        type Error = std::io::Error;
+
+        fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+            self.output.write_all(buf)
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            self.output.flush()
+        }
+    }
+
+    impl<R, W> fmt::Write for IO<R, W>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            self.write(s.as_bytes()).or(Err(fmt::Error))
         }
     }
 
     #[cfg(test)]
     mod tests {
-        use std::string::ToString;
-        use std::{thread, vec::Vec};
+        use ::std::string::ToString;
+        use ::std::{thread, vec::Vec};
 
-        use crossbeam::channel::{Receiver, Sender};
+        use crossbeam::channel::{unbounded, Receiver, Sender};
 
+        use crate::sync::Editor;
         use crate::testlib::{test_cases, test_editor_with_case, MockTerminal};
+        use ::std::io::Read as IoRead;
 
         use super::*;
 
@@ -235,7 +336,7 @@ pub mod with_std {
             }
         }
 
-        impl Read for MockStdin {
+        impl io::Read for MockStdin {
             fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
                 for i in 0..(buf.len()) {
                     match self.rx.recv() {
@@ -248,7 +349,7 @@ pub mod with_std {
             }
         }
 
-        impl Write for MockStdout {
+        impl io::Write for MockStdout {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
                 self.buffer.extend(buf);
                 Ok(buf.len())
@@ -264,7 +365,25 @@ pub mod with_std {
         }
 
         #[test]
-        fn test_editor() {
+        fn mock_stdin() {
+            let (tx, rx) = unbounded();
+
+            let mut stdin = MockStdin::new(rx);
+
+            for i in 0..10 {
+                tx.send(i).unwrap();
+            }
+
+            for i in 0..10 {
+                let mut buf = [0];
+                stdin.read_exact(&mut buf).unwrap();
+
+                assert_eq!(buf[0], i);
+            }
+        }
+
+        #[test]
+        fn editor() {
             let prompt = "> ";
 
             for case in test_cases() {
@@ -272,11 +391,12 @@ pub mod with_std {
                     case,
                     prompt,
                     |term| MockIO::from_terminal(term).get_pipes(),
-                    |(mut stdin, mut stdout), string_tx| {
-                        let mut editor =
-                            Editor::<Vec<u8>>::new(prompt, &mut stdin, &mut stdout).unwrap();
+                    |(stdin, stdout), string_tx| {
                         thread::spawn(move || {
-                            while let Ok(s) = editor.readline(&mut stdin, &mut stdout) {
+                            let mut io = IO::new(stdin, stdout);
+                            let mut editor = Editor::<Vec<u8>, _>::new(&mut io).unwrap();
+
+                            while let Ok(s) = editor.readline(prompt, &mut io) {
                                 string_tx.send(s.to_string()).unwrap();
                             }
                         })
@@ -291,99 +411,104 @@ pub mod with_std {
 pub mod embedded {
     //! Implementation for embedded systems
 
-    use super::*;
-    use core::cell::RefCell;
-    use embedded_hal::serial::{Read, Write};
+    use core::{
+        fmt,
+        ops::{Deref, DerefMut},
+    };
+
+    use embedded_hal::serial;
     use nb::block;
 
-    fn write_bytes<W, RE, WE>(bytes: &[u8], tx: &mut W) -> Result<(), Error<RE, WE>>
+    use super::*;
+
+    pub struct IO<RW>
     where
-        W: Write<u8, Error = WE>,
+        RW: serial::Read<u8> + serial::Write<u8>,
     {
-        for b in bytes {
-            block!(tx.write(*b)).or_else(|err| Error::write_error(err))?;
+        rw: RW,
+    }
+
+    impl<RW> IO<RW>
+    where
+        RW: serial::Read<u8> + serial::Write<u8>,
+    {
+        pub fn new(rw: RW) -> Self {
+            Self { rw }
         }
 
-        block!(tx.flush()).or_else(|err| Error::write_error(err))?;
-
-        Ok(())
-    }
-
-    fn output_closure<'b, W, RE, WE>(
-        tx: &'b mut W,
-    ) -> impl FnMut(&[u8]) -> Result<(), Error<RE, WE>> + 'b
-    where
-        W: Write<u8, Error = WE>,
-    {
-        |bytes| write_bytes(bytes, tx)
-    }
-
-    /// Line editor for embedded systems based on traits from
-    /// `embedded_hal`.
-    pub struct Editor<'a, B>
-    where
-        B: Buffer,
-    {
-        noline: Noline<'a, B>,
-    }
-
-    impl<'a, B> Editor<'a, B>
-    where
-        B: Buffer,
-    {
-        /// Create and initialize editor
-        pub fn new<S, RE, WE>(prompt: &'a str, serial: &mut S) -> Result<Self, Error<RE, WE>>
-        where
-            S: Write<u8, Error = WE> + Read<u8, Error = RE>,
-        {
-            let serial = RefCell::new(serial);
-
-            let noline = NolineInitializer::new(prompt).initialize(
-                || Ok(block!(serial.borrow_mut().read()).or_else(|err| Error::read_error(err))?),
-                |bytes| {
-                    let mut tx = serial.borrow_mut();
-
-                    write_bytes(bytes, *tx)?;
-                    Ok(())
-                },
-            )?;
-
-            Ok(Self { noline })
+        pub fn take(self) -> RW {
+            self.rw
         }
+    }
 
-        /// Read line from serial
-        pub fn readline<'b, S, RE, WE>(
-            &'b mut self,
-            serial: &mut S,
-        ) -> Result<&'b str, Error<RE, WE>>
-        where
-            S: Write<u8, Error = WE> + Read<u8, Error = RE>,
-        {
-            self.noline.reset(output_closure(serial))?;
+    impl<RW> Read for IO<RW>
+    where
+        RW: serial::Read<u8> + serial::Write<u8>,
+    {
+        type Error = <RW as serial::Read<u8>>::Error;
 
-            loop {
-                let byte = block!(serial.read()).or_else(|err| Error::read_error(err))?;
+        fn read(&mut self) -> Result<u8, Self::Error> {
+            block!(self.rw.read())
+        }
+    }
 
-                match self.noline.advance(byte, output_closure(serial)) {
-                    Some(rc) => {
-                        rc?;
+    impl<RW> Write for IO<RW>
+    where
+        RW: serial::Read<u8> + serial::Write<u8>,
+    {
+        type Error = <RW as serial::Write<u8>>::Error;
 
-                        break Ok(self.noline.buffer.as_str());
-                    }
-                    None => (),
-                }
+        fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+            for &b in buf {
+                block!(self.rw.write(b))?;
             }
+
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            block!(self.rw.flush())
+        }
+    }
+
+    impl<RW> fmt::Write for IO<RW>
+    where
+        RW: serial::Read<u8> + serial::Write<u8>,
+    {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            self.write(s.as_bytes()).or(Err(fmt::Error))
+        }
+    }
+
+    impl<RW> Deref for IO<RW>
+    where
+        RW: serial::Read<u8> + serial::Write<u8>,
+    {
+        type Target = RW;
+
+        fn deref(&self) -> &Self::Target {
+            &self.rw
+        }
+    }
+
+    impl<RW> DerefMut for IO<RW>
+    where
+        RW: serial::Read<u8> + serial::Write<u8>,
+    {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.rw
         }
     }
 
     #[cfg(test)]
     mod tests {
-        use std::string::ToString;
-        use std::{thread, vec::Vec};
+        use ::std::string::ToString;
+        use ::std::{thread, vec::Vec};
 
         use crossbeam::channel::{Receiver, Sender, TryRecvError};
 
         use crate::line_buffer::StaticBuffer;
+        use crate::sync::Editor;
         use crate::testlib::test_editor_with_case;
         use crate::testlib::{test_cases, MockTerminal};
 
@@ -410,7 +535,7 @@ pub mod embedded {
             }
         }
 
-        impl Read<u8> for MockSerial {
+        impl serial::Read<u8> for MockSerial {
             type Error = ();
 
             fn read(&mut self) -> nb::Result<u8, Self::Error> {
@@ -424,7 +549,7 @@ pub mod embedded {
             }
         }
 
-        impl Write<u8> for MockSerial {
+        impl serial::Write<u8> for MockSerial {
             type Error = ();
 
             fn write(&mut self, word: u8) -> nb::Result<(), Self::Error> {
@@ -450,11 +575,12 @@ pub mod embedded {
                     case,
                     prompt,
                     |term| MockSerial::from_terminal(term),
-                    |mut serial, string_tx| {
-                        let mut editor =
-                            Editor::<StaticBuffer<100>>::new(prompt, &mut serial).unwrap();
+                    |serial, string_tx| {
                         thread::spawn(move || {
-                            while let Ok(s) = editor.readline(&mut serial) {
+                            let mut io = IO::new(serial);
+                            let mut editor = Editor::<StaticBuffer<100>, _>::new(&mut io).unwrap();
+
+                            while let Ok(s) = editor.readline(prompt, &mut io) {
                                 string_tx.send(s.to_string()).unwrap();
                             }
                         })

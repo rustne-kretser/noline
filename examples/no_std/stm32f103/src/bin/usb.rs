@@ -9,11 +9,14 @@
 #![no_std]
 #![no_main]
 
+use core::fmt::Write as FmtWrite;
+
 use embedded_hal::serial::{Read, Write};
 use nb::block;
 use noline::error::Error;
 use noline::line_buffer::StaticBuffer;
-use noline::sync::embedded::Editor;
+use noline::sync::embedded::IO;
+use noline::sync::Editor;
 use panic_halt as _;
 
 use cortex_m::asm::delay;
@@ -27,13 +30,13 @@ use usbd_serial::{SerialPort, USB_CLASS_CDC};
 // The usb-device API doesn't play well with the `block!` from
 // `nb`. Added a simple wrapper to be able to use a shared
 // implementation for both the UART and USB examples.
-struct Wrapper<'a> {
+struct SerialWrapper<'a> {
     device: &'a mut UsbDevice<'a, UsbBus<Peripheral>>,
     serial: &'a mut SerialPort<'a, UsbBus<Peripheral>>,
     ready: bool,
 }
 
-impl<'a> Wrapper<'a> {
+impl<'a> SerialWrapper<'a> {
     fn new(
         device: &'a mut UsbDevice<'a, UsbBus<Peripheral>>,
         serial: &'a mut SerialPort<'a, UsbBus<Peripheral>>,
@@ -76,7 +79,7 @@ impl<'a> Wrapper<'a> {
     }
 }
 
-impl<'a> Read<u8> for Wrapper<'a> {
+impl<'a> Read<u8> for SerialWrapper<'a> {
     type Error = UsbError;
 
     fn read(&mut self) -> nb::Result<u8, Self::Error> {
@@ -84,7 +87,7 @@ impl<'a> Read<u8> for Wrapper<'a> {
     }
 }
 
-impl<'a> Write<u8> for Wrapper<'a> {
+impl<'a> Write<u8> for SerialWrapper<'a> {
     type Error = UsbError;
 
     fn write(&mut self, word: u8) -> nb::Result<(), Self::Error> {
@@ -93,6 +96,16 @@ impl<'a> Write<u8> for Wrapper<'a> {
 
     fn flush(&mut self) -> nb::Result<(), Self::Error> {
         self.try_op(|serial| Write::flush(serial))
+    }
+}
+
+impl<'a> FmtWrite for SerialWrapper<'a> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &b in s.as_bytes() {
+            self.write(b).or_else(|_| Err(core::fmt::Error {}))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -145,9 +158,9 @@ fn main() -> ! {
 
     let prompt = "> ";
 
-    let mut wrapper = Wrapper::new(&mut usb_dev, &mut serial);
+    let mut wrapper = IO::new(SerialWrapper::new(&mut usb_dev, &mut serial));
 
-    let mut editor: Editor<StaticBuffer<128>> = loop {
+    let mut editor: Editor<StaticBuffer<128>, _> = loop {
         if !wrapper.poll() || !wrapper.serial.dtr() || !wrapper.serial.rts() {
             continue;
         }
@@ -159,20 +172,18 @@ fn main() -> ! {
         // initialization, I've added this blocking read here to wait
         // for user input before proceeding.
         block!(wrapper.read()).unwrap();
-        break Editor::new(prompt, &mut wrapper).unwrap();
+        break Editor::new(&mut wrapper).unwrap();
     };
 
     loop {
-        match editor.readline(&mut wrapper) {
+        match editor.readline(prompt, &mut wrapper) {
             Ok(s) => {
-                wrapper.serial.write("Echo: ".as_bytes()).unwrap();
-
-                // Writing emtpy slice causes panic
                 if s.len() > 0 {
-                    wrapper.serial.write(s.as_bytes()).unwrap();
+                    writeln!(wrapper, "Echo: {}\r", s).unwrap();
+                } else {
+                    // Writing emtpy slice causes panic
+                    writeln!(wrapper, "Echo: \r").unwrap();
                 }
-
-                wrapper.serial.write("\n\r".as_bytes()).unwrap();
             }
             Err(err) => {
                 let error = match err {
@@ -190,9 +201,7 @@ fn main() -> ! {
                     Error::Aborted => "Aborted",
                 };
 
-                wrapper.serial.write("Failed: ".as_bytes()).unwrap();
-                wrapper.serial.write(error.as_bytes()).unwrap();
-                wrapper.serial.write("\n\r".as_bytes()).unwrap();
+                writeln!(wrapper, "Error: {}\r", error).unwrap();
             }
         }
     }

@@ -21,14 +21,20 @@
 //! The core consists of a massive state machine taking bytes as input
 //! and returning an iterator over byte slices. There are, however,
 //! some convenience wrappers:
-//! - [`sync::with_std::Editor`]
-//! - [`sync::embedded::Editor`]
-//! - [`no_sync::with_tokio::Editor`]
+//! - [`sync::Editor`]
+//!   - [`sync::std::IO`]
+//!   - [`sync::embedded::IO`]
+//! - [`no_sync::tokio::Editor`]
+//!
+//! # Feature flags
+//!
+//! All features are enabled by default
 //!
 //! # Example
-//! ```!
-//! use noline::sync::with_std::Editor;
-//! use std::io::{self, Write};
+//! ```no_run
+//! use noline::sync::{std::IO, Editor};
+//! use std::io;
+//! use std::fmt::Write;
 //! use termion::raw::IntoRawMode;
 //!
 //! fn main() {
@@ -36,11 +42,12 @@
 //!     let mut stdout = io::stdout().into_raw_mode().unwrap();
 //!     let prompt = "> ";
 //!
-//!     let mut editor = Editor::<Vec<u8>>::new(prompt, &mut stdin, &mut stdout).unwrap();
+//!     let mut io = IO::new(stdin, stdout);
+//!     let mut editor = Editor::<Vec<u8>, _>::new(&mut io).unwrap();
 //!
 //!     loop {
-//!         if let Ok(line) = editor.readline(&mut stdin, &mut stdout) {
-//!             write!(stdout, "Read: '{}'\n\r", line).unwrap();
+//!         if let Ok(line) = editor.readline(prompt, &mut io) {
+//!             write!(io, "Read: '{}'\n\r", line).unwrap();
 //!         } else {
 //!             break;
 //!         }
@@ -50,15 +57,14 @@
 
 #![no_std]
 
-#[cfg(any(test, feature = "std"))]
+#[cfg(any(test, doc, feature = "std"))]
 #[macro_use]
 extern crate std;
 
-mod common;
+mod core;
 pub mod error;
 mod input;
 pub mod line_buffer;
-mod marker;
 pub mod no_sync;
 mod output;
 pub mod sync;
