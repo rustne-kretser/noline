@@ -9,10 +9,10 @@
 //! - No allocation needed - Both heap-based and static buffers are provided
 //! - UTF-8 support
 //! - Emacs keybindings
+//! - Line history
 //!
 //! Possible future features:
 //! - Auto-completion and hints
-//! - Line history
 //!
 //! The API should be considered experimental and will change in the
 //! future.
@@ -59,6 +59,7 @@ extern crate std;
 
 mod core;
 pub mod error;
+pub mod history;
 mod input;
 pub mod line_buffer;
 pub mod no_sync;

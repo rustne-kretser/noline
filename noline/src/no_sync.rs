@@ -7,6 +7,7 @@ pub mod tokio {
     use crate::{
         core::{Initializer, InitializerResult, Line},
         error::Error,
+        history::{get_history_entries, CircularSlice, History, NoHistory},
         line_buffer::{Buffer, LineBuffer},
         output::OutputItem,
         terminal::Terminal,
@@ -45,20 +46,22 @@ pub mod tokio {
     }
 
     // Line editor for async IO
-    pub struct Editor<B: Buffer> {
+    pub struct Editor<B: Buffer, H: History> {
         buffer: LineBuffer<B>,
         terminal: Terminal,
+        history: H,
     }
 
-    impl<B> Editor<B>
+    impl<B, H> Editor<B, H>
     where
         B: Buffer,
+        H: History,
     {
         /// Create and initialize line editor
         pub async fn new<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
             stdin: &mut R,
             stdout: &mut W,
-        ) -> Result<Editor<B>, Error<std::io::Error, std::io::Error>> {
+        ) -> Result<Editor<B, H>, Error<std::io::Error, std::io::Error>> {
             let mut initializer = Initializer::new();
 
             write(stdout, Initializer::init()).await?;
@@ -77,6 +80,7 @@ pub mod tokio {
             Ok(Self {
                 buffer: LineBuffer::new(),
                 terminal,
+                history: H::default(),
             })
         }
 
@@ -87,7 +91,12 @@ pub mod tokio {
             stdin: &mut R,
             stdout: &mut W,
         ) -> Result<&'b str, Error<std::io::Error, std::io::Error>> {
-            let mut line = Line::new(prompt, &mut self.buffer, &mut self.terminal);
+            let mut line = Line::new(
+                prompt,
+                &mut self.buffer,
+                &mut self.terminal,
+                &mut self.history,
+            );
 
             for output in line.reset() {
                 write(stdout, output.get_bytes().unwrap_or_else(|| unreachable!())).await?;
@@ -120,6 +129,16 @@ pub mod tokio {
             } else {
                 Err(Error::Aborted)
             }
+        }
+
+        /// Load history from iterator
+        pub fn load_history<'a>(&mut self, entries: impl Iterator<Item = &'a str>) -> usize {
+            self.history.load_entries(entries)
+        }
+
+        /// Get history as iterator over circular slices
+        pub fn get_history<'a>(&'a self) -> impl Iterator<Item = CircularSlice<'a>> {
+            get_history_entries(&self.history)
         }
     }
 }

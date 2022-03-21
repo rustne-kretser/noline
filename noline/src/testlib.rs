@@ -11,6 +11,8 @@ use crate::terminal::Cursor;
 use ControlCharacter::*;
 
 pub mod csi {
+    pub const UP: &str = "\x1b[A";
+    pub const DOWN: &str = "\x1b[B";
     pub const LEFT: &str = "\x1b[D";
     pub const RIGHT: &str = "\x1b[C";
     pub const HOME: &str = "\x1b[1~";
@@ -65,6 +67,13 @@ impl MockTerminal {
             .filter(|s| s.len() > 0)
             .collect::<Vec<String>>()
             .join("\n")
+    }
+
+    pub fn current_line_as_string(&self) -> String {
+        self.screen[self.cursor.row]
+            .iter()
+            .take_while(|&&c| c != '\0')
+            .collect()
     }
 
     fn move_column(&mut self, steps: isize) {
@@ -154,13 +163,11 @@ impl MockTerminal {
                 match ctrl {
                     ControlCharacter::CarriageReturn => self.cursor.column = 0,
                     ControlCharacter::LineFeed => {
-                        dbg!(self.cursor);
                         if self.cursor.row + 1 == self.rows {
                             self.scroll_up(1);
                         } else {
                             self.cursor.row += 1;
                         }
-                        dbg!(self.cursor);
                     }
                     ControlCharacter::CtrlG => self.bell = true,
                     _ => (),

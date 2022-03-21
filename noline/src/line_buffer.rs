@@ -149,34 +149,37 @@ impl<B: Buffer> LineBuffer<B> {
         }
     }
 
-    /// Insert UTF-8 char at position
-    pub fn insert_utf8_char(&mut self, char_index: usize, c: Utf8Char) -> Result<(), Utf8Char> {
-        let pos = self.get_byte_position(char_index);
-
+    /// Insert bytes at index
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the input bytes are a valid UTF-8
+    /// sequence and that the byte index aligns with a valid UTF-8 character index.
+    pub unsafe fn insert_bytes(&mut self, index: usize, bytes: &[u8]) -> Result<(), ()> {
         if let Some(capacity) = self.buf.capacity() {
-            if c.as_bytes().len() > capacity - self.buf.buffer_len() {
-                return Err(c);
+            if bytes.len() > capacity - self.buf.buffer_len() {
+                return Err(());
             }
         }
 
-        for (i, byte) in c.as_bytes().iter().enumerate() {
-            self.buf.insert_byte(pos + i, *byte);
+        for (i, byte) in bytes.iter().enumerate() {
+            self.buf.insert_byte(index + i, *byte);
         }
 
         Ok(())
     }
 
-    #[cfg(test)]
-    pub fn insert_str(&mut self, char_index: usize, s: &str) {
-        use ::std::string::ToString;
-
-        for (pos, c) in s
-            .chars()
-            .map(|c| Utf8Char::from_str(&c.to_string()))
-            .enumerate()
-        {
-            assert!(self.insert_utf8_char(char_index + pos, c).is_ok());
+    /// Insert UTF-8 char at position
+    pub fn insert_utf8_char(&mut self, char_index: usize, c: Utf8Char) -> Result<(), Utf8Char> {
+        unsafe {
+            self.insert_bytes(self.get_byte_position(char_index), c.as_bytes())
+                .or_else(|_| Err(c))
         }
+    }
+
+    /// Insert string at char position
+    pub fn insert_str(&mut self, char_index: usize, s: &str) -> Result<(), ()> {
+        unsafe { self.insert_bytes(self.get_byte_position(char_index), s.as_bytes()) }
     }
 }
 

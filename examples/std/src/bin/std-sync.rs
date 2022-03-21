@@ -1,3 +1,4 @@
+use noline::history::UnboundedHistory;
 use noline::sync::{std::IO, Editor};
 use std::fmt::Write;
 use std::io;
@@ -10,7 +11,7 @@ fn main() {
 
     let mut io = IO::new(stdin, stdout);
 
-    let mut editor = Editor::<Vec<u8>, _>::new(&mut io).unwrap();
+    let mut editor = Editor::<Vec<u8>, UnboundedHistory, _>::new(&mut io).unwrap();
 
     loop {
         if let Ok(line) = editor.readline(prompt, &mut io) {
