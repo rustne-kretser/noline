@@ -713,7 +713,7 @@ mod tests {
 
         assert_eq!(result, "\r\x1b[J> \x1b[6n");
 
-        line_buffer.insert_str(0, "Hello, world!");
+        line_buffer.insert_str(0, "Hello, world!").unwrap();
 
         let result = to_string(Output::new(
             prompt,

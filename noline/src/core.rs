@@ -3,7 +3,7 @@
 //! Use [`Initializer`] to get [`crate::terminal::Terminal`] and then
 //! use [`Line`] to read a single line.
 
-use crate::history::{CircularSlice, History, HistoryNavigator};
+use crate::history::{History, HistoryNavigator};
 use crate::input::{Action, ControlCharacter::*, Parser, CSI};
 use crate::line_buffer::Buffer;
 use crate::line_buffer::LineBuffer;

@@ -183,6 +183,41 @@ impl<B: Buffer> LineBuffer<B> {
     }
 }
 
+/// Emtpy buffer used for builder
+pub struct NoBuffer {}
+
+impl Default for NoBuffer {
+    fn default() -> Self {
+        unimplemented!()
+    }
+}
+
+impl Buffer for NoBuffer {
+    fn buffer_len(&self) -> usize {
+        unimplemented!()
+    }
+
+    fn capacity(&self) -> Option<usize> {
+        unimplemented!()
+    }
+
+    fn truncate_buffer(&mut self, _index: usize) {
+        unimplemented!()
+    }
+
+    fn insert_byte(&mut self, _index: usize, _byte: u8) {
+        unimplemented!()
+    }
+
+    fn remove_byte(&mut self, _index: usize) -> u8 {
+        unimplemented!()
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        unimplemented!()
+    }
+}
+
 /// Static buffer backed by array
 pub struct StaticBuffer<const N: usize> {
     array: [u8; N],
@@ -250,7 +285,9 @@ mod alloc {
     use self::alloc::vec::Vec;
     use super::*;
 
-    impl Buffer for Vec<u8> {
+    pub type UnboundedBuffer = Vec<u8>;
+
+    impl Buffer for UnboundedBuffer {
         fn buffer_len(&self) -> usize {
             self.len()
         }
@@ -298,7 +335,7 @@ mod tests {
     }
 
     fn insert_str<B: Buffer>(buf: &mut LineBuffer<B>, index: usize, s: &str) {
-        buf.insert_str(index, s);
+        buf.insert_str(index, s).unwrap();
     }
 
     fn test_line_buffer<B: Buffer>(buf: &mut LineBuffer<B>) {

@@ -1,4 +1,4 @@
-use noline::no_sync::tokio::Editor;
+use noline::builder::EditorBuilder;
 use termion::raw::IntoRawMode;
 use tokio::io::{self, AsyncWriteExt};
 
@@ -10,7 +10,9 @@ async fn main() {
 
     let prompt = "> ";
 
-    let mut editor = Editor::<Vec<u8>>::new(&mut stdin, &mut stdout)
+    let mut editor = EditorBuilder::new_unbounded()
+        .with_unbounded_history()
+        .build_async_tokio(&mut stdin, &mut stdout)
         .await
         .unwrap();
 

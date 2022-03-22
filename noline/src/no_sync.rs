@@ -7,7 +7,7 @@ pub mod tokio {
     use crate::{
         core::{Initializer, InitializerResult, Line},
         error::Error,
-        history::{get_history_entries, CircularSlice, History, NoHistory},
+        history::{get_history_entries, CircularSlice, History},
         line_buffer::{Buffer, LineBuffer},
         output::OutputItem,
         terminal::Terminal,
@@ -45,7 +45,9 @@ pub mod tokio {
             .or_else(|err| Error::read_error(err))?)
     }
 
-    // Line editor for async IO
+    /// Line editor for async IO
+    ///
+    /// It is recommended to use [`crate::builder::EditorBuilder`] to build an editor.
     pub struct Editor<B: Buffer, H: History> {
         buffer: LineBuffer<B>,
         terminal: Terminal,

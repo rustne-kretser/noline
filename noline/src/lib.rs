@@ -17,29 +17,36 @@
 //! The API should be considered experimental and will change in the
 //! future.
 //!
+//! The core implementation consists of a state machie taking bytes as
+//! input and yielding iterators over byte slices. Because this is
+//! done without any IO, Noline can be adapted to work on any platform.
 //!
-//! The core consists of a massive state machine taking bytes as input
-//! and returning an iterator over byte slices. There are, however,
-//! some convenience wrappers:
-//! - [`sync::Editor`]
-//!   - [`sync::std::IO`]
-//!   - [`sync::embedded::IO`]
-//! - [`no_sync::tokio::Editor`]
+//! Noline comes with multiple implemenations:
+//! - [`sync::Editor`] – Editor for asynchronous IO with two separate IO wrappers:
+//!   - [`sync::std::IO`] – IO wrapper for [`std::io::Read`] and [`std::io::Write`] traits
+//!   - [`sync::embedded::IO`] – IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
+//! - [`no_sync::tokio::Editor`] - Editor for [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`]
+//!
+//! Editors can be built using [`builder::EditorBuilder`].
 //!
 //! # Example
 //! ```no_run
-//! use noline::sync::{std::IO, Editor};
-//! use std::io;
+//! use noline::{sync::std::IO, builder::EditorBuilder};
 //! use std::fmt::Write;
+//! use std::io;
 //! use termion::raw::IntoRawMode;
 //!
 //! fn main() {
-//!     let mut stdin = io::stdin();
-//!     let mut stdout = io::stdout().into_raw_mode().unwrap();
+//!     let stdin = io::stdin();
+//!     let stdout = io::stdout().into_raw_mode().unwrap();
 //!     let prompt = "> ";
 //!
 //!     let mut io = IO::new(stdin, stdout);
-//!     let mut editor = Editor::<Vec<u8>, _>::new(&mut io).unwrap();
+//!
+//!     let mut editor = EditorBuilder::new_unbounded()
+//!         .with_unbounded_history()
+//!         .build_sync(&mut io)
+//!         .unwrap();
 //!
 //!     loop {
 //!         if let Ok(line) = editor.readline(prompt, &mut io) {
@@ -56,7 +63,7 @@
 #[cfg(any(test, doc, feature = "std"))]
 #[macro_use]
 extern crate std;
-
+pub mod builder;
 mod core;
 pub mod error;
 pub mod history;
