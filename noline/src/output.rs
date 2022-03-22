@@ -37,6 +37,7 @@ pub enum OutputAction {
     Nothing,
     MoveCursor(CursorMove),
     ClearAndPrintPrompt,
+    ClearAndPrintBuffer,
     PrintBufferAndMoveCursorForward,
     EraseAfterCursor,
     EraseAndPrintBuffer,
@@ -267,7 +268,14 @@ impl<'a> Step<'a> {
                 None
             }
             Erase => self.transition(Step::Done, OutputItem::Slice("\x1b[J".as_bytes())),
-            Newline => self.transition(Step::Done, OutputItem::Slice("\n\r".as_bytes())),
+            Newline => {
+                let mut position = terminal.get_position();
+                position.row += 1;
+                position.column = 0;
+                terminal.move_cursor(position);
+
+                self.transition(Step::Done, OutputItem::Slice("\n\r".as_bytes()))
+            }
             Bell => self.transition(Step::Done, OutputItem::Slice("\x07".as_bytes())),
             EndOfString => self.transition(Step::Done, OutputItem::EndOfString),
             Abort => self.transition(Step::Done, OutputItem::Abort),
@@ -489,6 +497,18 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                         OutputAction::ClearAndPrintPrompt => OutputState::ThreeSteps(
                             [ClearLine, Print(self.prompt), GetPosition].into_iter(),
                         ),
+                        OutputAction::ClearAndPrintBuffer => {
+                            let position = self.new_position(CursorMove::Start);
+
+                            OutputState::ThreeSteps(
+                                [
+                                    Move(MoveCursorToPosition::new(position)),
+                                    Erase,
+                                    Print(self.buffer.as_str()),
+                                ]
+                                .into_iter(),
+                            )
+                        }
                         OutputAction::Done => {
                             OutputState::TwoSteps([Newline, EndOfString].into_iter())
                         }
@@ -693,7 +713,7 @@ mod tests {
 
         assert_eq!(result, "\r\x1b[J> \x1b[6n");
 
-        line_buffer.insert_str(0, "Hello, world!");
+        line_buffer.insert_str(0, "Hello, world!").unwrap();
 
         let result = to_string(Output::new(
             prompt,

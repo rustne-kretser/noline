@@ -3,6 +3,7 @@
 //! Use [`Initializer`] to get [`crate::terminal::Terminal`] and then
 //! use [`Line`] to read a single line.
 
+use crate::history::{History, HistoryNavigator};
 use crate::input::{Action, ControlCharacter::*, Parser, CSI};
 use crate::line_buffer::Buffer;
 use crate::line_buffer::LineBuffer;
@@ -87,20 +88,27 @@ impl Initializer {
 // line, get cursor position and print prompt. Call [`Line::advance`]
 // for each byte read from input and print bytes from
 // [`crate::output::Output`] to output.
-pub struct Line<'a, B: Buffer> {
+pub struct Line<'a, B: Buffer, H: History> {
     buffer: &'a mut LineBuffer<B>,
     terminal: &'a mut Terminal,
     parser: Parser,
     prompt: &'a str,
+    nav: HistoryNavigator<'a, H>,
 }
 
-impl<'a, B: Buffer> Line<'a, B> {
-    pub fn new(prompt: &'a str, buffer: &'a mut LineBuffer<B>, terminal: &'a mut Terminal) -> Self {
+impl<'a, B: Buffer, H: History> Line<'a, B, H> {
+    pub fn new(
+        prompt: &'a str,
+        buffer: &'a mut LineBuffer<B>,
+        terminal: &'a mut Terminal,
+        history: &'a mut H,
+    ) -> Self {
         Self {
             buffer,
             terminal,
             parser: Parser::new(),
             prompt,
+            nav: HistoryNavigator::new(history),
         }
     }
 
@@ -117,6 +125,54 @@ impl<'a, B: Buffer> Line<'a, B> {
     fn current_position(&self) -> usize {
         let pos = self.terminal.current_offset() as usize;
         pos - self.prompt.len()
+    }
+
+    fn history_move_up<'b>(&'b mut self) -> Output<'b, B> {
+        let entry = if self.nav.is_active() {
+            self.nav.move_up()
+        } else if self.buffer.len() == 0 {
+            self.nav.reset();
+            self.nav.move_up()
+        } else {
+            Err(())
+        };
+
+        if let Ok(entry) = entry {
+            let (slice1, slice2) = entry.get_slices();
+
+            self.buffer.truncate();
+            unsafe {
+                self.buffer.insert_bytes(0, slice1).unwrap();
+                self.buffer.insert_bytes(slice1.len(), slice2).unwrap();
+            }
+
+            self.generate_output(ClearAndPrintBuffer)
+        } else {
+            self.generate_output(RingBell)
+        }
+    }
+
+    fn history_move_down<'b>(&'b mut self) -> Output<'b, B> {
+        let entry = if self.nav.is_active() {
+            self.nav.move_down()
+        } else {
+            return self.generate_output(RingBell);
+        };
+
+        if let Ok(entry) = entry {
+            let (slice1, slice2) = entry.get_slices();
+
+            self.buffer.truncate();
+            unsafe {
+                self.buffer.insert_bytes(0, slice1).unwrap();
+                self.buffer.insert_bytes(slice1.len(), slice2).unwrap();
+            }
+        } else {
+            self.nav.reset();
+            self.buffer.truncate();
+        }
+
+        self.generate_output(ClearAndPrintBuffer)
     }
 
     // Advance state machine by one byte. Returns output iterator over
@@ -171,6 +227,8 @@ impl<'a, B: Buffer> Line<'a, B> {
                     self.buffer.delete_after_char(0);
                     self.generate_output(ClearScreen)
                 }
+                CtrlN => self.history_move_down(),
+                CtrlP => self.history_move_up(),
                 CtrlT => {
                     let pos = self.current_position();
 
@@ -190,7 +248,13 @@ impl<'a, B: Buffer> Line<'a, B> {
                     let move_cursor = -(self.buffer.delete_previous_word(pos) as isize);
                     self.generate_output(MoveCursorAndEraseAndPrintBuffer(move_cursor))
                 }
-                CarriageReturn => self.generate_output(Done),
+                CarriageReturn => {
+                    if self.buffer.len() > 0 {
+                        let _ = self.nav.history.add_entry(self.buffer.as_str());
+                    }
+
+                    self.generate_output(Done)
+                }
                 CtrlH | Backspace => {
                     let pos = self.current_position();
                     if pos > 0 {
@@ -225,8 +289,8 @@ impl<'a, B: Buffer> Line<'a, B> {
                     self.generate_output(Nothing)
                 }
                 CSI::Unknown(_) => self.generate_output(RingBell),
-                CSI::CUU(_) => self.generate_output(RingBell),
-                CSI::CUD(_) => self.generate_output(RingBell),
+                CSI::CUU(_) => self.history_move_up(),
+                CSI::CUD(_) => self.history_move_down(),
                 CSI::CUP(_, _) => self.generate_output(RingBell),
                 CSI::ED(_) => self.generate_output(RingBell),
                 CSI::DSR => self.generate_output(RingBell),
@@ -246,18 +310,20 @@ pub(crate) mod tests {
 
     use std::string::String;
 
+    use crate::history::{NoHistory, StaticHistory, UnboundedHistory};
     use crate::line_buffer::StaticBuffer;
     use crate::terminal::Cursor;
     use crate::testlib::{csi, AsByteVec, MockTerminal};
 
     use super::*;
 
-    struct Editor<B: Buffer> {
+    struct Editor<B: Buffer, H: History> {
         buffer: LineBuffer<B>,
         terminal: Terminal,
+        history: H,
     }
 
-    impl<B: Buffer> Editor<B> {
+    impl<B: Buffer, H: History> Editor<B, H> {
         fn new(term: &mut MockTerminal) -> Self {
             let mut initializer = Initializer::new();
 
@@ -278,12 +344,22 @@ pub(crate) mod tests {
             Self {
                 buffer: LineBuffer::new(),
                 terminal,
+                history: H::default(),
             }
         }
 
-        fn get_line<'b>(&'b mut self, prompt: &'b str, mockterm: &mut MockTerminal) -> Line<'b, B> {
+        fn get_line<'b>(
+            &'b mut self,
+            prompt: &'b str,
+            mockterm: &mut MockTerminal,
+        ) -> Line<'b, B, H> {
             let cursor = mockterm.get_cursor();
-            let mut line = Line::new(prompt, &mut self.buffer, &mut self.terminal);
+            let mut line = Line::new(
+                prompt,
+                &mut self.buffer,
+                &mut self.terminal,
+                &mut self.history,
+            );
 
             let output: Vec<u8> = line
                 .reset()
@@ -303,16 +379,16 @@ pub(crate) mod tests {
                     .for_each(|output| assert!(output.get_bytes().is_none()))
             });
 
-            assert_eq!(mockterm.screen_as_string(), prompt);
+            assert_eq!(mockterm.current_line_as_string(), prompt);
             assert_eq!(mockterm.get_cursor(), Cursor::new(cursor.row, prompt.len()));
 
             line
         }
     }
 
-    fn advance<'a, B: Buffer>(
+    fn advance<'a, B: Buffer, H: History>(
         terminal: &mut MockTerminal,
-        noline: &mut Line<'a, B>,
+        noline: &mut Line<'a, B, H>,
         input: impl AsByteVec,
     ) -> core::result::Result<(), ()> {
         terminal.bell = false;
@@ -342,7 +418,7 @@ pub(crate) mod tests {
         rows: usize,
         columns: usize,
         origin: Cursor,
-    ) -> (MockTerminal, Editor<Vec<u8>>) {
+    ) -> (MockTerminal, Editor<Vec<u8>, NoHistory>) {
         let mut terminal = MockTerminal::new(rows, columns, origin);
 
         let editor = Editor::new(&mut terminal);
@@ -628,7 +704,7 @@ pub(crate) mod tests {
     #[test]
     fn static_buffer() {
         let mut terminal = MockTerminal::new(20, 80, Cursor::new(0, 0));
-        let mut editor: Editor<StaticBuffer<20>> = Editor::new(&mut terminal);
+        let mut editor: Editor<StaticBuffer<20>, NoHistory> = Editor::new(&mut terminal);
 
         let mut line = editor.get_line("> ", &mut terminal);
 
@@ -641,5 +717,102 @@ pub(crate) mod tests {
         assert_eq!(line.buffer.as_str(), input);
 
         advance(&mut terminal, &mut line, Backspace).unwrap();
+    }
+
+    #[test]
+    fn history() {
+        fn test<H: History>() {
+            let mut terminal = MockTerminal::new(20, 80, Cursor::new(0, 0));
+            let mut editor: Editor<StaticBuffer<20>, H> = Editor::new(&mut terminal);
+
+            let mut line = editor.get_line("> ", &mut terminal);
+
+            advance(&mut terminal, &mut line, "this is a line\r").unwrap();
+
+            let mut line = editor.get_line("> ", &mut terminal);
+
+            assert_eq!(terminal.screen_as_string(), "> this is a line\n> ");
+
+            assert!(advance(&mut terminal, &mut line, csi::UP).is_ok());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> this is a line"
+            );
+
+            assert!(advance(&mut terminal, &mut line, csi::DOWN).is_ok());
+
+            assert_eq!(terminal.screen_as_string(), "> this is a line\n> ");
+
+            advance(&mut terminal, &mut line, "another line\r").unwrap();
+
+            let mut line = editor.get_line("> ", &mut terminal);
+            advance(&mut terminal, &mut line, "yet another line\r").unwrap();
+
+            let mut line = editor.get_line("> ", &mut terminal);
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> "
+            );
+
+            assert!(advance(&mut terminal, &mut line, csi::UP).is_ok());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> yet another line"
+            );
+
+            assert!(advance(&mut terminal, &mut line, csi::UP).is_ok());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> another line"
+            );
+
+            assert!(advance(&mut terminal, &mut line, csi::UP).is_ok());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> this is a line"
+            );
+
+            assert!(advance(&mut terminal, &mut line, csi::UP).is_err());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> this is a line"
+            );
+
+            assert!(advance(&mut terminal, &mut line, csi::DOWN).is_ok());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> another line"
+            );
+
+            assert!(advance(&mut terminal, &mut line, csi::DOWN).is_ok());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> yet another line"
+            );
+            assert!(advance(&mut terminal, &mut line, csi::DOWN).is_ok());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> "
+            );
+
+            assert!(advance(&mut terminal, &mut line, csi::DOWN).is_err());
+
+            assert_eq!(
+                terminal.screen_as_string(),
+                "> this is a line\n> another line\n> yet another line\n> "
+            );
+        }
+
+        test::<UnboundedHistory>();
+        test::<StaticHistory<128>>();
     }
 }

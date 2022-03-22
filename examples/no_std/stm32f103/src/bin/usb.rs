@@ -13,10 +13,9 @@ use core::fmt::Write as FmtWrite;
 
 use embedded_hal::serial::{Read, Write};
 use nb::block;
+use noline::builder::EditorBuilder;
 use noline::error::Error;
-use noline::line_buffer::StaticBuffer;
 use noline::sync::embedded::IO;
-use noline::sync::Editor;
 use panic_halt as _;
 
 use cortex_m::asm::delay;
@@ -158,10 +157,10 @@ fn main() -> ! {
 
     let prompt = "> ";
 
-    let mut wrapper = IO::new(SerialWrapper::new(&mut usb_dev, &mut serial));
+    let mut io = IO::new(SerialWrapper::new(&mut usb_dev, &mut serial));
 
-    let mut editor: Editor<StaticBuffer<128>, _> = loop {
-        if !wrapper.poll() || !wrapper.serial.dtr() || !wrapper.serial.rts() {
+    let mut editor = loop {
+        if !io.inner().poll() || !io.inner().serial.dtr() || !io.inner().serial.rts() {
             continue;
         }
 
@@ -171,18 +170,21 @@ fn main() -> ! {
         // usbd-serial. Becase noline needs to write during
         // initialization, I've added this blocking read here to wait
         // for user input before proceeding.
-        block!(wrapper.read()).unwrap();
-        break Editor::new(&mut wrapper).unwrap();
+        block!(io.inner().read()).unwrap();
+        break EditorBuilder::new_static::<128>()
+            .with_static_history::<128>()
+            .build_sync(&mut io)
+            .unwrap();
     };
 
     loop {
-        match editor.readline(prompt, &mut wrapper) {
+        match editor.readline(prompt, &mut io) {
             Ok(s) => {
                 if s.len() > 0 {
-                    writeln!(wrapper, "Echo: {}\r", s).unwrap();
+                    writeln!(io, "Echo: {}\r", s).unwrap();
                 } else {
                     // Writing emtpy slice causes panic
-                    writeln!(wrapper, "Echo: \r").unwrap();
+                    writeln!(io, "Echo: \r").unwrap();
                 }
             }
             Err(err) => {
@@ -201,7 +203,7 @@ fn main() -> ! {
                     Error::Aborted => "Aborted",
                 };
 
-                writeln!(wrapper, "Error: {}\r", error).unwrap();
+                writeln!(io, "Error: {}\r", error).unwrap();
             }
         }
     }

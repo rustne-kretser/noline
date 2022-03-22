@@ -7,11 +7,7 @@
 #![no_std]
 
 use heapless::spsc::{Consumer, Producer, Queue};
-use noline::{
-    error::Error,
-    line_buffer::StaticBuffer,
-    sync::{embedded::IO, Editor},
-};
+use noline::{builder::EditorBuilder, error::Error, sync::embedded::IO};
 use panic_halt as _;
 
 use cortex_m::asm;
@@ -130,8 +126,11 @@ fn main() -> ! {
     let mut io = IO::new(SerialWrapper::new(tx, rx_consumer));
 
     let prompt = "> ";
-    let mut editor: Editor<StaticBuffer<128>, _> = loop {
-        match Editor::new(&mut io) {
+    let mut editor = loop {
+        match EditorBuilder::new_static::<128>()
+            .with_static_history::<128>()
+            .build_sync(&mut io)
+        {
             Ok(editor) => break editor,
             Err(err) => {
                 let error = match err {

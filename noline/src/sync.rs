@@ -2,10 +2,12 @@
 //!
 //! The editor takes a struct implementing the [`Read`] and [`Write`]
 //! traits. There are ready made implementations in [`std::IO`] and [`embedded::IO`].
-
+//!
+//! Use the [`crate::builder::EditorBuilder`] to build an editor.
 use ::core::marker::PhantomData;
 
 use crate::error::Error;
+use crate::history::{get_history_entries, CircularSlice, History};
 use crate::line_buffer::{Buffer, LineBuffer};
 
 use crate::core::{Initializer, InitializerResult, Line};
@@ -16,7 +18,7 @@ use crate::terminal::Terminal;
 pub trait Read {
     type Error;
 
-    // Read single byte from input
+    /// Read single byte from input
     fn read(&mut self) -> Result<u8, Self::Error>;
 }
 
@@ -27,20 +29,24 @@ pub trait Write {
     /// Write byte slice to output
     fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
 
-    // Flush output
+    /// Flush output
     fn flush(&mut self) -> Result<(), Self::Error>;
 }
 
 /// Line editor for synchronous IO
-pub struct Editor<B: Buffer, IO: Read + Write> {
+///
+/// It is recommended to use [`crate::builder::EditorBuilder`] to build an Editor.
+pub struct Editor<B: Buffer, H: History, IO: Read + Write> {
     buffer: LineBuffer<B>,
     terminal: Terminal,
+    history: H,
     _marker: PhantomData<IO>,
 }
 
-impl<B, IO, RE, WE> Editor<B, IO>
+impl<B, H, IO, RE, WE> Editor<B, H, IO>
 where
     B: Buffer,
+    H: History,
     IO: Read<Error = RE> + Write<Error = WE>,
 {
     /// Create and initialize line editor
@@ -64,6 +70,7 @@ where
         Ok(Self {
             buffer: LineBuffer::new(),
             terminal,
+            history: H::default(),
             _marker: PhantomData,
         })
     }
@@ -92,7 +99,12 @@ where
         prompt: &'b str,
         io: &mut IO,
     ) -> Result<&'b str, Error<RE, WE>> {
-        let mut line = Line::new(prompt, &mut self.buffer, &mut self.terminal);
+        let mut line = Line::new(
+            prompt,
+            &mut self.buffer,
+            &mut self.terminal,
+            &mut self.history,
+        );
         Self::handle_output(line.reset(), io)?;
 
         loop {
@@ -104,10 +116,22 @@ where
 
         Ok(self.buffer.as_str())
     }
+
+    /// Load history from iterator
+    pub fn load_history<'a>(&mut self, entries: impl Iterator<Item = &'a str>) -> usize {
+        self.history.load_entries(entries)
+    }
+
+    /// Get history as iterator over circular slices
+    pub fn get_history<'a>(&'a self) -> impl Iterator<Item = CircularSlice<'a>> {
+        get_history_entries(&self.history)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::builder::EditorBuilder;
+
     use super::*;
     use ::std::string::ToString;
     use ::std::{thread, vec::Vec};
@@ -164,7 +188,7 @@ mod tests {
         let mut io = IO::new(input_rx, output_tx);
 
         let handle = thread::spawn(move || {
-            let mut editor: Editor<Vec<u8>, _> = Editor::new(&mut io).unwrap();
+            let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
 
             if let Ok(s) = editor.readline("> ", &mut io) {
                 Some(s.to_string())
@@ -285,7 +309,7 @@ pub mod std {
 
         use crossbeam::channel::{unbounded, Receiver, Sender};
 
-        use crate::sync::Editor;
+        use crate::builder::EditorBuilder;
         use crate::testlib::{test_cases, test_editor_with_case, MockTerminal};
         use ::std::io::Read as IoRead;
 
@@ -394,7 +418,10 @@ pub mod std {
                     |(stdin, stdout), string_tx| {
                         thread::spawn(move || {
                             let mut io = IO::new(stdin, stdout);
-                            let mut editor = Editor::<Vec<u8>, _>::new(&mut io).unwrap();
+                            let mut editor = EditorBuilder::new_unbounded()
+                                .with_unbounded_history()
+                                .build_sync(&mut io)
+                                .unwrap();
 
                             while let Ok(s) = editor.readline(prompt, &mut io) {
                                 string_tx.send(s.to_string()).unwrap();
@@ -409,18 +436,16 @@ pub mod std {
 
 #[cfg(any(test, feature = "embedded"))]
 pub mod embedded {
-    //! Implementation for embedded systems. Requires feature `embedded`.
+    //! IO implementation using traits from [`embedded_hal::serial`]. Requires feature `embedded`.
 
-    use core::{
-        fmt,
-        ops::{Deref, DerefMut},
-    };
+    use core::fmt;
 
     use embedded_hal::serial;
     use nb::block;
 
     use super::*;
 
+    /// IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
     pub struct IO<RW>
     where
         RW: serial::Read<u8> + serial::Write<u8>,
@@ -436,8 +461,14 @@ pub mod embedded {
             Self { rw }
         }
 
+        /// Consume self and return wrapped object
         pub fn take(self) -> RW {
             self.rw
+        }
+
+        /// Return mutable reference to wrapped object
+        pub fn inner(&mut self) -> &mut RW {
+            &mut self.rw
         }
     }
 
@@ -480,26 +511,6 @@ pub mod embedded {
         }
     }
 
-    impl<RW> Deref for IO<RW>
-    where
-        RW: serial::Read<u8> + serial::Write<u8>,
-    {
-        type Target = RW;
-
-        fn deref(&self) -> &Self::Target {
-            &self.rw
-        }
-    }
-
-    impl<RW> DerefMut for IO<RW>
-    where
-        RW: serial::Read<u8> + serial::Write<u8>,
-    {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.rw
-        }
-    }
-
     #[cfg(test)]
     mod tests {
         use ::std::string::ToString;
@@ -507,8 +518,7 @@ pub mod embedded {
 
         use crossbeam::channel::{Receiver, Sender, TryRecvError};
 
-        use crate::line_buffer::StaticBuffer;
-        use crate::sync::Editor;
+        use crate::builder::EditorBuilder;
         use crate::testlib::test_editor_with_case;
         use crate::testlib::{test_cases, MockTerminal};
 
@@ -578,7 +588,10 @@ pub mod embedded {
                     |serial, string_tx| {
                         thread::spawn(move || {
                             let mut io = IO::new(serial);
-                            let mut editor = Editor::<StaticBuffer<100>, _>::new(&mut io).unwrap();
+                            let mut editor = EditorBuilder::new_static::<100>()
+                                .with_static_history::<128>()
+                                .build_sync(&mut io)
+                                .unwrap();
 
                             while let Ok(s) = editor.readline(prompt, &mut io) {
                                 string_tx.send(s.to_string()).unwrap();

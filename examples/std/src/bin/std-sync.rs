@@ -1,4 +1,4 @@
-use noline::sync::{std::IO, Editor};
+use noline::{builder::EditorBuilder, sync::std::IO};
 use std::fmt::Write;
 use std::io;
 use termion::raw::IntoRawMode;
@@ -10,7 +10,10 @@ fn main() {
 
     let mut io = IO::new(stdin, stdout);
 
-    let mut editor = Editor::<Vec<u8>, _>::new(&mut io).unwrap();
+    let mut editor = EditorBuilder::new_unbounded()
+        .with_unbounded_history()
+        .build_sync(&mut io)
+        .unwrap();
 
     loop {
         if let Ok(line) = editor.readline(prompt, &mut io) {
