@@ -3,6 +3,7 @@
 //! Use [`Initializer`] to get [`crate::terminal::Terminal`] and then
 //! use [`Line`] to read a single line.
 
+use crate::complete::{Completer, CompletionCycler};
 use crate::history::{History, HistoryNavigator};
 use crate::input::{Action, ControlCharacter::*, Parser, CSI};
 use crate::line_buffer::Buffer;
@@ -88,20 +89,22 @@ impl Initializer {
 // line, get cursor position and print prompt. Call [`Line::advance`]
 // for each byte read from input and print bytes from
 // [`crate::output::Output`] to output.
-pub struct Line<'a, B: Buffer, H: History> {
+pub struct Line<'a, B: Buffer, H: History, C: Completer> {
     buffer: &'a mut LineBuffer<B>,
     terminal: &'a mut Terminal,
     parser: Parser,
     prompt: &'a str,
     nav: HistoryNavigator<'a, H>,
+    completer: CompletionCycler<C>,
 }
 
-impl<'a, B: Buffer, H: History> Line<'a, B, H> {
+impl<'a, B: Buffer, H: History, C: Completer> Line<'a, B, H, C> {
     pub fn new(
         prompt: &'a str,
         buffer: &'a mut LineBuffer<B>,
         terminal: &'a mut Terminal,
         history: &'a mut H,
+        completer: C,
     ) -> Self {
         Self {
             buffer,
@@ -109,6 +112,7 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
             parser: Parser::new(),
             prompt,
             nav: HistoryNavigator::new(history),
+            completer: CompletionCycler::new(completer),
         }
     }
 
@@ -183,10 +187,19 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
         #[cfg(test)]
         dbg!(action);
 
+        let pos = self.current_position();
+
+        if self.buffer.len() == pos {
+            if let Action::ControlCharacter(Tab) = action {
+                if self.completer.complete(self.buffer).is_ok() {
+                    return self.generate_output(ClearAndPrintBuffer);
+                }
+            }
+        }
+        self.completer.reset();
+
         match action {
             Action::Print(c) => {
-                let pos = self.current_position();
-
                 if self.buffer.insert_utf8_char(pos, c).is_ok() {
                     self.generate_output(PrintBufferAndMoveCursorForward)
                 } else {
@@ -201,8 +214,6 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
                     let len = self.buffer.len();
 
                     if len > 0 {
-                        let pos = self.current_position();
-
                         if pos < len {
                             self.buffer.delete(pos);
 
@@ -217,8 +228,6 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
                 CtrlE => self.generate_output(MoveCursor(CursorMove::End)),
                 CtrlF => self.generate_output(MoveCursor(CursorMove::Forward)),
                 CtrlK => {
-                    let pos = self.current_position();
-
                     self.buffer.delete_after_char(pos);
 
                     self.generate_output(EraseAfterCursor)
@@ -230,8 +239,6 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
                 CtrlN => self.history_move_down(),
                 CtrlP => self.history_move_up(),
                 CtrlT => {
-                    let pos = self.current_position();
-
                     if pos > 0 && pos < self.buffer.as_str().chars().count() {
                         self.buffer.swap_chars(pos);
                         self.generate_output(MoveCursorBackAndPrintBufferAndMoveForward)
@@ -244,7 +251,6 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
                     self.generate_output(ClearLine)
                 }
                 CtrlW => {
-                    let pos = self.current_position();
                     let move_cursor = -(self.buffer.delete_previous_word(pos) as isize);
                     self.generate_output(MoveCursorAndEraseAndPrintBuffer(move_cursor))
                 }
@@ -256,7 +262,6 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
                     self.generate_output(Done)
                 }
                 CtrlH | Backspace => {
-                    let pos = self.current_position();
                     if pos > 0 {
                         self.buffer.delete(pos - 1);
                         self.generate_output(MoveCursorAndEraseAndPrintBuffer(-1))
@@ -272,7 +277,6 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
                 CSI::Home => self.generate_output(MoveCursor(CursorMove::Start)),
                 CSI::Delete => {
                     let len = self.buffer.len();
-                    let pos = self.current_position();
 
                     if pos < len {
                         self.buffer.delete(pos);
@@ -352,13 +356,14 @@ pub(crate) mod tests {
             &'b mut self,
             prompt: &'b str,
             mockterm: &mut MockTerminal,
-        ) -> Line<'b, B, H> {
+        ) -> Line<'b, B, H, ()> {
             let cursor = mockterm.get_cursor();
             let mut line = Line::new(
                 prompt,
                 &mut self.buffer,
                 &mut self.terminal,
                 &mut self.history,
+                (),
             );
 
             let output: Vec<u8> = line
@@ -388,7 +393,7 @@ pub(crate) mod tests {
 
     fn advance<'a, B: Buffer, H: History>(
         terminal: &mut MockTerminal,
-        noline: &mut Line<'a, B, H>,
+        noline: &mut Line<'a, B, H, ()>,
         input: impl AsByteVec,
     ) -> core::result::Result<(), ()> {
         terminal.bell = false;

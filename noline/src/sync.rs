@@ -10,6 +10,7 @@ use crate::error::Error;
 use crate::history::{get_history_entries, CircularSlice, History};
 use crate::line_buffer::{Buffer, LineBuffer};
 
+use crate::complete::Completer;
 use crate::core::{Initializer, InitializerResult, Line};
 use crate::output::{Output, OutputItem};
 use crate::terminal::Terminal;
@@ -98,12 +99,14 @@ where
         &'b mut self,
         prompt: &'b str,
         io: &mut IO,
+        completer: impl Completer,
     ) -> Result<&'b str, Error<RE, WE>> {
         let mut line = Line::new(
             prompt,
             &mut self.buffer,
             &mut self.terminal,
             &mut self.history,
+            completer,
         );
         Self::handle_output(line.reset(), io)?;
 
@@ -190,7 +193,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
 
-            if let Ok(s) = editor.readline("> ", &mut io) {
+            if let Ok(s) = editor.readline("> ", &mut io, ()) {
                 Some(s.to_string())
             } else {
                 None
@@ -423,7 +426,7 @@ pub mod std {
                                 .build_sync(&mut io)
                                 .unwrap();
 
-                            while let Ok(s) = editor.readline(prompt, &mut io) {
+                            while let Ok(s) = editor.readline(prompt, &mut io, ()) {
                                 string_tx.send(s.to_string()).unwrap();
                             }
                         })
@@ -593,7 +596,7 @@ pub mod embedded {
                                 .build_sync(&mut io)
                                 .unwrap();
 
-                            while let Ok(s) = editor.readline(prompt, &mut io) {
+                            while let Ok(s) = editor.readline(prompt, &mut io, ()) {
                                 string_tx.send(s.to_string()).unwrap();
                             }
                         })
