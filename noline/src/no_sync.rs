@@ -5,6 +5,7 @@ pub mod tokio {
     //! Implementation for tokio
 
     use crate::{
+        complete::Completer,
         core::{Initializer, InitializerResult, Line},
         error::Error,
         history::{get_history_entries, CircularSlice, History},
@@ -92,12 +93,14 @@ pub mod tokio {
             prompt: &str,
             stdin: &mut R,
             stdout: &mut W,
+            completer: impl Completer,
         ) -> Result<&'b str, Error<std::io::Error, std::io::Error>> {
             let mut line = Line::new(
                 prompt,
                 &mut self.buffer,
                 &mut self.terminal,
                 &mut self.history,
+                completer,
             );
 
             for output in line.reset() {
