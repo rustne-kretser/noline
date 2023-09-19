@@ -59,6 +59,7 @@
 //! ```
 
 #![no_std]
+#![cfg_attr(feature = "async_trait", feature(async_fn_in_trait))]
 
 #[cfg(any(test, doc, feature = "std"))]
 #[macro_use]

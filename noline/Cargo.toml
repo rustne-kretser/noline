@@ -27,6 +27,7 @@ default = []
 std = []
 embedded = ["embedded-hal", "nb"]
 alloc = []
+async_trait = []
 
 [dev-dependencies]
 crossbeam = "0.8.1"
