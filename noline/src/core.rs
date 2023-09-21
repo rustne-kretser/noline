@@ -248,7 +248,7 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
                     let move_cursor = -(self.buffer.delete_previous_word(pos) as isize);
                     self.generate_output(MoveCursorAndEraseAndPrintBuffer(move_cursor))
                 }
-                CarriageReturn => {
+                CarriageReturn | LineFeed => {
                     if self.buffer.len() > 0 {
                         let _ = self.nav.history.add_entry(self.buffer.as_str());
                     }
