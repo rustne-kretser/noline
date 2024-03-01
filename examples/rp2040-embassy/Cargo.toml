@@ -12,25 +12,20 @@ defmt = []
 
 embassy-rp = { version = "0.1.0", features = [
     "defmt",
-    "unstable-traits",
-    "nightly",
     "unstable-pac",
     "time-driver",
     "critical-section-impl",
 ] }
 embassy-embedded-hal = { version = "0.1.0", features = ["defmt"] }
-embassy-executor = { version = "0.2.0", features = [
+embassy-executor = { version = "0.5.0", features = [
     "arch-cortex-m",
     "executor-thread",
-    "nightly",
     "integrated-timers",
     "arch-cortex-m",
     "executor-thread",
 ] }
-embassy-sync = { version = "0.2.0", features = ["defmt"] }
-embassy-time = { version = "0.1.2", features = [
-    "nightly",
-    "unstable-traits",
+embassy-sync = { version = "0.5.0", features = ["defmt"] }
+embassy-time = { version = "0.3.0", features = [
     "defmt",
     "defmt-timestamp-uptime",
 ] }
@@ -47,13 +42,12 @@ fixed-macro = "1.2"
 cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = "0.7.0"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
-heapless = "0.7.15"
-embedded-hal = { version = "0.2.7", features = ["unproven"] }
+heapless = "0.8.0"
+embedded-hal = { version = "1.0.0" }
 
 # fugit = "0.3.7"
 noline = { path = "../../noline", version = "0.2.0", default-features = false, features = [
     "embedded",
-    "async_trait",
 ] }
 nb = "1.0.0"
 fixed-queue = "0.5.1"
@@ -61,13 +55,3 @@ fixed-queue = "0.5.1"
 
 [profile.release]
 debug = 2
-
-
-[patch.crates-io]
-embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "94fa95c699df78c44750b63ba1a44c07802d0165" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "94fa95c699df78c44750b63ba1a44c07802d0165" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "94fa95c699df78c44750b63ba1a44c07802d0165" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "94fa95c699df78c44750b63ba1a44c07802d0165" }
-embassy-rp = { git = "https://github.com/embassy-rs/embassy", rev = "94fa95c699df78c44750b63ba1a44c07802d0165" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "94fa95c699df78c44750b63ba1a44c07802d0165" }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "94fa95c699df78c44750b63ba1a44c07802d0165" }

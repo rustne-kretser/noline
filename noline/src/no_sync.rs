@@ -13,7 +13,7 @@ pub mod tokio {
         terminal::Terminal,
     };
 
-    use ::tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn write<W: AsyncWriteExt + Unpin>(
         stdout: &mut W,
@@ -145,7 +145,8 @@ pub mod tokio {
     }
 }
 
-#[cfg(any(doc, feature = "async_trait"))]
+#[cfg(any(test, doc, feature = "embedded"))]
+#[allow(async_fn_in_trait)]
 pub mod async_trait {
     //! Line editor for async IO
 

@@ -1,5 +1,3 @@
-#![feature(async_fn_in_trait)]
-
 use noline::no_sync::async_trait::{AsyncEditor, NolineAsyncRead, NolineAsyncWrite};
 use noline::error::Error;
 use noline::history::StaticHistory;

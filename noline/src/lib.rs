@@ -24,7 +24,7 @@
 //! Noline comes with multiple implemenations:
 //! - [`sync::Editor`] – Editor for asynchronous IO with two separate IO wrappers:
 //!   - [`sync::std::IO`] – IO wrapper for [`std::io::Read`] and [`std::io::Write`] traits
-//!   - [`sync::embedded::IO`] – IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
+//!   - [`sync::embedded::IO`] – IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
 //! - [`no_sync::tokio::Editor`] - Editor for [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`]
 //!
 //! Editors can be built using [`builder::EditorBuilder`].
@@ -59,7 +59,6 @@
 //! ```
 
 #![no_std]
-#![cfg_attr(feature = "async_trait", feature(async_fn_in_trait))]
 
 #[cfg(any(test, doc, feature = "std"))]
 #[macro_use]

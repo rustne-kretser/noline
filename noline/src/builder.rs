@@ -16,7 +16,7 @@ use crate::line_buffer::UnboundedBuffer;
 use crate::history::UnboundedHistory;
 
 #[cfg(any(test, doc, feature = "tokio"))]
-use ::tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[cfg(any(test, doc, feature = "tokio"))]
 use crate::no_sync;

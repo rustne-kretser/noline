@@ -9,30 +9,27 @@ repository = "https://github.com/rustne-kretser/noline"
 readme = "../README.md"
 categories = ["no-std", "command-line-interface"]
 keywords = ["no_std", "readline"]
-include = [
-    "**/*.rs",
-    "Cargo.toml",
-]
+include = ["**/*.rs", "Cargo.toml"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-num_enum = {version = "0.7.0", default-features = false}
-embedded-hal = {version = "0.2.6", optional = true}
-nb = {version = "1.0.0", optional = true}
-tokio = {version = "1.16.1", optional = true, features = ["io-util", "sync"]}
+num_enum = { version = "0.7.0", default-features = false }
+embedded-io = { version = "0.6.1", optional = true }
+nb = { version = "1.0.0", optional = true }
+tokio = { version = "1.16.1", optional = true, features = ["io-util", "sync"] }
 
 [features]
 default = []
-std = []
-embedded = ["embedded-hal", "nb"]
+std = ["tokio"]
+embedded = ["embedded-io", "nb"]
 alloc = []
 async_trait = []
 
 [dev-dependencies]
 crossbeam = "0.8.1"
-nb = {version = "1.0.0"}
-termion = "2.0.1"
+nb = { version = "1.0.0" }
+termion = "3.0.0"
 
 [package.metadata.docs.rs]
 all-features = true

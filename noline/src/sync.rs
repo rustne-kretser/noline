@@ -436,26 +436,22 @@ pub mod std {
 
 #[cfg(any(test, feature = "embedded"))]
 pub mod embedded {
-    //! IO implementation using traits from [`embedded_hal::serial`]. Requires feature `embedded`.
-
-    use core::fmt;
-
-    use embedded_hal::serial;
-    use nb::block;
+    //! IO implementation using traits from [`embedded_io`]. Requires feature `embedded`.
 
     use super::*;
+    use core::fmt;
 
-    /// IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
+    /// IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
     pub struct IO<RW>
     where
-        RW: serial::Read<u8> + serial::Write<u8>,
+        RW: embedded_io::Read + embedded_io::Write,
     {
         rw: RW,
     }
 
     impl<RW> IO<RW>
     where
-        RW: serial::Read<u8> + serial::Write<u8>,
+        RW: embedded_io::Read + embedded_io::Write,
     {
         pub fn new(rw: RW) -> Self {
             Self { rw }
@@ -474,37 +470,40 @@ pub mod embedded {
 
     impl<RW> Read for IO<RW>
     where
-        RW: serial::Read<u8> + serial::Write<u8>,
+        RW: embedded_io::Read + embedded_io::Write,
     {
-        type Error = <RW as serial::Read<u8>>::Error;
+        type Error = (); //embedded_io::Read::Error<()>;
 
         fn read(&mut self) -> Result<u8, Self::Error> {
-            block!(self.rw.read())
+            let mut buf = [0_u8; 1];
+            match self.rw.read_exact(&mut buf) {
+                Ok(()) => Ok(buf[0]),
+                Err(_) => Err(()),
+            }
         }
     }
 
     impl<RW> Write for IO<RW>
     where
-        RW: serial::Read<u8> + serial::Write<u8>,
+        RW: embedded_io::Read + embedded_io::Write,
     {
-        type Error = <RW as serial::Write<u8>>::Error;
+        type Error = ();
 
         fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-            for &b in buf {
-                block!(self.rw.write(b))?;
+            match self.rw.write_all(buf) {
+                Ok(()) => Ok(()),
+                Err(_) => Err(()),
             }
-
-            Ok(())
         }
 
         fn flush(&mut self) -> Result<(), Self::Error> {
-            block!(self.rw.flush())
+            self.rw.flush().map_err(|_| ())
         }
     }
 
     impl<RW> fmt::Write for IO<RW>
     where
-        RW: serial::Read<u8> + serial::Write<u8>,
+        RW: embedded_io::Read + embedded_io::Write,
     {
         fn write_str(&mut self, s: &str) -> fmt::Result {
             self.write(s.as_bytes()).or(Err(fmt::Error))
