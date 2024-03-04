@@ -529,6 +529,10 @@ pub mod embedded {
             tx: Sender<u8>,
         }
 
+        impl embedded_io::ErrorType for MockSerial {
+            type Error = embedded_io::ErrorKind;
+        }
+
         impl MockSerial {
             fn new(tx: Sender<u8>, rx: Receiver<u8>) -> Self {
                 Self {
@@ -544,29 +548,29 @@ pub mod embedded {
             }
         }
 
-        impl serial::Read<u8> for MockSerial {
-            type Error = ();
-
-            fn read(&mut self) -> nb::Result<u8, Self::Error> {
+        impl embedded_io::Read for MockSerial {
+            fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+                println!("READING");
                 match self.rx.try_recv() {
-                    Ok(byte) => Ok(byte),
+                    Ok(byte) => {
+                        buf[0] = byte;
+                        Ok(1)
+                    }
                     Err(err) => match err {
-                        TryRecvError::Empty => Err(nb::Error::WouldBlock),
-                        TryRecvError::Disconnected => Err(nb::Error::Other(())),
+                        TryRecvError::Empty => Err(embedded_io::ErrorKind::Other),
+                        TryRecvError::Disconnected => Err(embedded_io::ErrorKind::Other),
                     },
                 }
             }
         }
 
-        impl serial::Write<u8> for MockSerial {
-            type Error = ();
-
-            fn write(&mut self, word: u8) -> nb::Result<(), Self::Error> {
-                self.buffer.push(word);
-                Ok(())
+        impl embedded_io::Write for MockSerial {
+            fn write(&mut self, word: &[u8]) -> Result<usize, Self::Error> {
+                self.buffer.push(word[0]);
+                Ok(1)
             }
 
-            fn flush(&mut self) -> nb::Result<(), Self::Error> {
+            fn flush(&mut self) -> Result<(), Self::Error> {
                 for byte in self.buffer.drain(0..) {
                     self.tx.send(byte).unwrap();
                 }
