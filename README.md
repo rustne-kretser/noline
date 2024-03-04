@@ -10,6 +10,7 @@ it can be adapted to any system be it embedded, async, async
 embedded, WASM or IPoAC (IP over Avian Carriers).
 
 Features:
+
 - IO-free
 - Minimal dependencies
 - No allocation needed - Both heap-based and static buffers are provided
@@ -18,6 +19,7 @@ Features:
 - Line history
 
 Possible future features:
+
 - Auto-completion and hints
 
 The API should be considered experimental and will change in the
@@ -28,14 +30,16 @@ input and yielding iterators over byte slices. Because this is
 done without any IO, Noline can be adapted to work on any platform.
 
 Noline comes with multiple implemenations:
+
 - [`sync::Editor`] – Editor for asynchronous IO with two separate IO wrappers:
   - [`sync::std::IO`] – IO wrapper for [`std::io::Read`] and [`std::io::Write`] traits
-  - [`sync::embedded::IO`] – IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
+  - [`sync::embedded::IO`] – IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
 - [`no_sync::tokio::Editor`] - Editor for [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`]
 
 Editors can be built using [`builder::EditorBuilder`].
 
 ## Example
+
 ```rust
 use noline::{sync::std::IO, builder::EditorBuilder};
 use std::fmt::Write;
