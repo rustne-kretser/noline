@@ -3,10 +3,11 @@
 use core::marker::PhantomData;
 
 use crate::{
-    error::Error,
+    error::NolineError,
+    sync_io::SyncIO,
+    async_io::ASyncIO,
     history::{History, NoHistory, StaticHistory},
     line_buffer::{Buffer, NoBuffer, StaticBuffer},
-    sync::{self, Read, Write},
 };
 
 #[cfg(any(test, feature = "alloc", feature = "std"))]
@@ -96,23 +97,21 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
     }
 
     /// Build [`sync::Editor`]. Is equivalent of calling [`sync::Editor::new()`].
-    pub fn build_sync<IO, RE, WE>(
+    pub fn build_sync<IO: SyncIO>(
         self,
         io: &mut IO,
-    ) -> Result<sync::Editor<B, H, IO>, Error<RE, WE>>
-    where
-        IO: Read<Error = RE> + Write<Error = WE>,
+    ) -> Result<crate::sync::Editor<B, H, IO>, NolineError>
     {
-        sync::Editor::new(io)
+        crate::sync::Editor::new(io)
     }
 
     #[cfg(any(test, doc, feature = "tokio"))]
     /// Build [`no_sync::tokio::Editor`]. Is equivalent of calling [`no_sync::tokio::Editor::new()`].
-    pub async fn build_async_tokio<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
+    pub async fn build_async(
         self,
-        stdin: &mut R,
-        stdout: &mut W,
-    ) -> Result<no_sync::tokio::Editor<B, H>, Error<std::io::Error, std::io::Error>> {
-        no_sync::tokio::Editor::new(stdin, stdout).await
+        read: &mut embedded_io_async::Read<Error = embedded_io_async::ErrorKind>,
+        write: &mut embedded_io_async::Write<Error = embedded_io_async::ErrorKind>,
+    ) -> Result<no_sync::tokio::Editor<B, H>, NolineError> {
+        no_sync::tokio::Editor::new(read, write).await
     }
 }

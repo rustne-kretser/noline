@@ -2,19 +2,19 @@
 
 /// Enum to hold various error types
 #[derive(Debug)]
-pub enum Error<RE, WE> {
+pub enum NolineError {
     ParserError,
     Aborted,
-    ReadError(RE),
-    WriteError(WE),
+    ReadError(embedded_io::ErrorKind),
+    WriteError(embedded_io::ErrorKind),
 }
 
-impl<RE, WE> Error<RE, WE> {
-    pub fn read_error<T>(err: RE) -> Result<T, Self> {
-        Err(Self::ReadError(err))
-    }
+// impl Error {
+//     pub fn read_error<T>(err: RE) -> Result<T, Self> {
+//         Err(Self::ReadError(err))
+//     }
 
-    pub fn write_error<T>(err: WE) -> Result<T, Self> {
-        Err(Self::WriteError(err))
-    }
-}
+//     pub fn write_error<T>(err: WE) -> Result<T, Self> {
+//         Err(Self::WriteError(err))
+//     }
+// }

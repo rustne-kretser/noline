@@ -5,45 +5,14 @@ pub mod tokio {
     //! Implementation for tokio
 
     use crate::{
+        async_io::ASyncIO,
         core::{Initializer, InitializerResult, Line},
-        error::Error,
+        error::NolineError,
         history::{get_history_entries, CircularSlice, History},
         line_buffer::{Buffer, LineBuffer},
         output::OutputItem,
         terminal::Terminal,
     };
-
-    use ::tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    async fn write<W: AsyncWriteExt + Unpin>(
-        stdout: &mut W,
-        buf: &[u8],
-    ) -> Result<(), Error<std::io::Error, std::io::Error>> {
-        stdout
-            .write_all(buf)
-            .await
-            .or_else(|err| Error::write_error(err))?;
-        Ok(())
-    }
-
-    async fn flush<W: AsyncWriteExt + Unpin>(
-        stdout: &mut W,
-    ) -> Result<(), Error<std::io::Error, std::io::Error>> {
-        stdout
-            .flush()
-            .await
-            .or_else(|err| Error::write_error(err))?;
-        Ok(())
-    }
-
-    async fn read<R: AsyncReadExt + Unpin>(
-        stdin: &mut R,
-    ) -> Result<u8, Error<std::io::Error, std::io::Error>> {
-        Ok(stdin
-            .read_u8()
-            .await
-            .or_else(|err| Error::read_error(err))?)
-    }
 
     /// Line editor for async IO
     ///
@@ -60,22 +29,22 @@ pub mod tokio {
         H: History,
     {
         /// Create and initialize line editor
-        pub async fn new<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
-            stdin: &mut R,
-            stdout: &mut W,
-        ) -> Result<Editor<B, H>, Error<std::io::Error, std::io::Error>> {
+        pub async fn new(
+            read: &mut dyn embedded_io_async::Read,
+            write: &mut dyn embedded_io_async::Write,
+        ) -> Result<Self, NolineError> {
             let mut initializer = Initializer::new();
 
-            write(stdout, Initializer::init()).await?;
-            flush(stdout).await?;
+            write.write(Initializer::init()).await?;
+            write.flush().await?;
 
             let terminal = loop {
-                let byte = read(stdin).await?;
+                let byte = read.read().await?;
 
                 match initializer.advance(byte) {
                     InitializerResult::Continue => (),
                     InitializerResult::Item(terminal) => break terminal,
-                    InitializerResult::InvalidInput => return Err(Error::ParserError),
+                    InitializerResult::InvalidInput => return Err(NolineError::ParserError),
                 }
             };
 
@@ -87,12 +56,11 @@ pub mod tokio {
         }
 
         /// Read line from `stdin`
-        pub async fn readline<'b, W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
+        pub async fn readline<'b>(
             &'b mut self,
             prompt: &str,
-            stdin: &mut R,
-            stdout: &mut W,
-        ) -> Result<&'b str, Error<std::io::Error, std::io::Error>> {
+            io: &mut dyn ASyncIO,
+        ) -> Result<&'b str, NolineError> {
             let mut line = Line::new(
                 prompt,
                 &mut self.buffer,
@@ -101,17 +69,17 @@ pub mod tokio {
             );
 
             for output in line.reset() {
-                write(stdout, output.get_bytes().unwrap_or_else(|| unreachable!())).await?;
+                io.write(output.get_bytes().unwrap_or_else(|| unreachable!())).await?;
             }
 
-            flush(stdout).await?;
+            io.flush().await?;
 
             let end_of_string = 'outer: loop {
-                let b = read(stdin).await?;
+                let b = io.read().await?;
 
                 for item in line.advance(b) {
                     if let Some(bytes) = item.get_bytes() {
-                        write(stdout, bytes).await?;
+                        io.write(bytes).await?;
                     }
 
                     match item {
@@ -121,15 +89,15 @@ pub mod tokio {
                     }
                 }
 
-                flush(stdout).await?;
+                io.flush().await?;
             };
 
-            flush(stdout).await?;
+            io.flush().await?;
 
             if end_of_string {
                 Ok(self.buffer.as_str())
             } else {
-                Err(Error::Aborted)
+                Err(NolineError::Aborted)
             }
         }
 

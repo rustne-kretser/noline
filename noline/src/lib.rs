@@ -63,6 +63,7 @@
 #[cfg(any(test, doc, feature = "std"))]
 #[macro_use]
 extern crate std;
+pub mod async_io;
 pub mod builder;
 mod core;
 pub mod error;
@@ -72,6 +73,7 @@ pub mod line_buffer;
 pub mod no_sync;
 mod output;
 pub mod sync;
+pub mod sync_io;
 pub(crate) mod terminal;
 mod utf8;
 

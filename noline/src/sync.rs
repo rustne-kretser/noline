@@ -4,66 +4,56 @@
 //! traits. There are ready made implementations in [`std::IO`] and [`embedded::IO`].
 //!
 //! Use the [`crate::builder::EditorBuilder`] to build an editor.
-use ::core::marker::PhantomData;
+use crate::error::NolineError;
+use core::marker::PhantomData;
 
-use crate::error::Error;
 use crate::history::{get_history_entries, CircularSlice, History};
 use crate::line_buffer::{Buffer, LineBuffer};
 
 use crate::core::{Initializer, InitializerResult, Line};
 use crate::output::{Output, OutputItem};
+use crate::sync_io::SyncIO;
 use crate::terminal::Terminal;
-
-/// Trait for reading bytes from input
-pub trait Read {
-    type Error;
-
-    /// Read single byte from input
-    fn read(&mut self) -> Result<u8, Self::Error>;
-}
-
-/// Trait for writing bytes to output
-pub trait Write {
-    type Error;
-
-    /// Write byte slice to output
-    fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
-
-    /// Flush output
-    fn flush(&mut self) -> Result<(), Self::Error>;
-}
 
 /// Line editor for synchronous IO
 ///
 /// It is recommended to use [`crate::builder::EditorBuilder`] to build an Editor.
-pub struct Editor<B: Buffer, H: History, IO: Read + Write> {
+pub struct Editor<B: Buffer, H: History, IO: SyncIO> {
     buffer: LineBuffer<B>,
     terminal: Terminal,
     history: H,
     _marker: PhantomData<IO>,
 }
 
-impl<B, H, IO, RE, WE> Editor<B, H, IO>
+impl<B, H, IO> Editor<B, H, IO>
 where
     B: Buffer,
     H: History,
-    IO: Read<Error = RE> + Write<Error = WE>,
+    IO: SyncIO,
 {
     /// Create and initialize line editor
-    pub fn new(io: &mut IO) -> Result<Self, Error<RE, WE>> {
+    pub fn new(io: &mut dyn SyncIO) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
 
-        io.write(Initializer::init())
-            .or_else(|err| Error::write_error(err))?;
-        io.flush().or_else(|err| Error::write_error(err))?;
+        io.write(Initializer::init())?;
+
+        io.flush()?;
 
         let terminal = loop {
-            let byte = io.read().or_else(|err| Error::read_error(err))?;
+            let mut buf = [0u8; 1];
 
-            match initializer.advance(byte) {
-                InitializerResult::Continue => (),
-                InitializerResult::Item(terminal) => break terminal,
-                InitializerResult::InvalidInput => return Err(Error::ParserError),
+            let len = io.read(&mut buf)?;
+            if len == 1 {
+                match initializer.advance(buf[0]) {
+                    InitializerResult::Continue => (),
+                    InitializerResult::Item(terminal) => break terminal,
+                    InitializerResult::InvalidInput => {
+                        return Err(NolineError::ParserError);
+                    }
+                }
+            }
+            if len == 0 {
+                return Err(NolineError::Aborted);
             }
         };
 
@@ -75,17 +65,20 @@ where
         })
     }
 
-    fn handle_output<'b>(output: Output<'b, B>, io: &mut IO) -> Result<Option<()>, Error<RE, WE>> {
+    fn handle_output<'b>(
+        output: Output<'b, B>,
+        io: &mut dyn SyncIO,
+    ) -> Result<Option<()>, NolineError> {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
-                io.write(bytes).or_else(|err| Error::write_error(err))?;
+                io.write(bytes)?;
             }
 
-            io.flush().or_else(|err| Error::write_error(err))?;
+            io.flush()?;
 
             match item {
                 OutputItem::EndOfString => return Ok(Some(())),
-                OutputItem::Abort => return Err(Error::Aborted),
+                OutputItem::Abort => return Err(NolineError::Aborted),
                 _ => (),
             }
         }
@@ -97,8 +90,8 @@ where
     pub fn readline<'b>(
         &'b mut self,
         prompt: &'b str,
-        io: &mut IO,
-    ) -> Result<&'b str, Error<RE, WE>> {
+        io: &mut dyn SyncIO,
+    ) -> Result<&'b str, NolineError> {
         let mut line = Line::new(
             prompt,
             &mut self.buffer,
@@ -108,9 +101,12 @@ where
         Self::handle_output(line.reset(), io)?;
 
         loop {
-            let byte = io.read().or_else(|err| Error::read_error(err))?;
-            if Self::handle_output(line.advance(byte), io)?.is_some() {
-                break;
+            let mut buf = [0x8; 1];
+            let len = io.read(&mut buf)?;
+            if len == 1 {
+                if Self::handle_output(line.advance(buf[0]), io)?.is_some() {
+                    break;
+                }
             }
         }
 
@@ -133,9 +129,9 @@ mod tests {
     use crate::builder::EditorBuilder;
 
     use super::*;
-    use ::std::string::ToString;
-    use ::std::{thread, vec::Vec};
     use crossbeam::channel::{unbounded, Receiver, Sender};
+    use std::string::ToString;
+    use std::{thread, vec::Vec};
 
     struct IO {
         input: Receiver<u8>,
@@ -229,89 +225,16 @@ mod tests {
 pub mod std {
     //! IO implementation for `std`. Requires feature `std`.
 
-    use super::*;
-
-    use ::std::io;
-    use core::fmt;
-
-    /// IO wrapper for stdin and stdout
-
-    pub struct IO<R, W>
-    where
-        R: io::Read,
-        W: io::Write,
-    {
-        input: R,
-        output: W,
-    }
-
-    impl<R, W> IO<R, W>
-    where
-        R: io::Read,
-        W: io::Write,
-    {
-        /// Create IO wrapper from input and output
-        pub fn new(input: R, output: W) -> Self {
-            Self { input, output }
-        }
-
-        /// Consume wrapper and return input and output as tuple
-        pub fn take(self) -> (R, W) {
-            (self.input, self.output)
-        }
-    }
-
-    impl<R, W> Read for IO<R, W>
-    where
-        R: io::Read,
-        W: io::Write,
-    {
-        type Error = std::io::Error;
-
-        fn read(&mut self) -> Result<u8, Self::Error> {
-            let mut buf = [0];
-            self.input.read_exact(&mut buf)?;
-
-            Ok(buf[0])
-        }
-    }
-
-    impl<R, W> Write for IO<R, W>
-    where
-        R: io::Read,
-        W: io::Write,
-    {
-        type Error = std::io::Error;
-
-        fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-            self.output.write_all(buf)
-        }
-
-        fn flush(&mut self) -> Result<(), Self::Error> {
-            self.output.flush()
-        }
-    }
-
-    impl<R, W> fmt::Write for IO<R, W>
-    where
-        R: io::Read,
-        W: io::Write,
-    {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            self.write(s.as_bytes()).or(Err(fmt::Error))
-        }
-    }
-
     #[cfg(test)]
     mod tests {
-        use ::std::string::ToString;
-        use ::std::{thread, vec::Vec};
+        use std::string::ToString;
+        use std::{thread, vec::Vec};
 
         use crossbeam::channel::{unbounded, Receiver, Sender};
 
         use crate::builder::EditorBuilder;
         use crate::testlib::{test_cases, test_editor_with_case, MockTerminal};
-        use ::std::io::Read as IoRead;
+        use std::io::Read as IoRead;
 
         use super::*;
 
@@ -436,85 +359,22 @@ pub mod std {
 
 #[cfg(any(test, feature = "embedded"))]
 pub mod embedded {
-    //! IO implementation using traits from [`embedded_hal::serial`]. Requires feature `embedded`.
+    //! IO implementation using traits from [`embedded_io`]. Requires feature `embedded`.
 
-    use core::fmt;
+    //    use core::fmt;
 
-    use embedded_hal::serial;
-    use nb::block;
+    //    use embedded_io;
+    //use nb::block;
 
-    use super::*;
+    //use super::*;
+    //use crate::sync_io::IO;
 
-    /// IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
-    pub struct IO<RW>
-    where
-        RW: serial::Read<u8> + serial::Write<u8>,
-    {
-        rw: RW,
-    }
-
-    impl<RW> IO<RW>
-    where
-        RW: serial::Read<u8> + serial::Write<u8>,
-    {
-        pub fn new(rw: RW) -> Self {
-            Self { rw }
-        }
-
-        /// Consume self and return wrapped object
-        pub fn take(self) -> RW {
-            self.rw
-        }
-
-        /// Return mutable reference to wrapped object
-        pub fn inner(&mut self) -> &mut RW {
-            &mut self.rw
-        }
-    }
-
-    impl<RW> Read for IO<RW>
-    where
-        RW: serial::Read<u8> + serial::Write<u8>,
-    {
-        type Error = <RW as serial::Read<u8>>::Error;
-
-        fn read(&mut self) -> Result<u8, Self::Error> {
-            block!(self.rw.read())
-        }
-    }
-
-    impl<RW> Write for IO<RW>
-    where
-        RW: serial::Read<u8> + serial::Write<u8>,
-    {
-        type Error = <RW as serial::Write<u8>>::Error;
-
-        fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-            for &b in buf {
-                block!(self.rw.write(b))?;
-            }
-
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), Self::Error> {
-            block!(self.rw.flush())
-        }
-    }
-
-    impl<RW> fmt::Write for IO<RW>
-    where
-        RW: serial::Read<u8> + serial::Write<u8>,
-    {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            self.write(s.as_bytes()).or(Err(fmt::Error))
-        }
-    }
+    /// IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
 
     #[cfg(test)]
     mod tests {
-        use ::std::string::ToString;
-        use ::std::{thread, vec::Vec};
+        use std::string::ToString;
+        use std::{thread, vec::Vec};
 
         use crossbeam::channel::{Receiver, Sender, TryRecvError};
 
