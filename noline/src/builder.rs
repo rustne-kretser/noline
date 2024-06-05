@@ -114,7 +114,7 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
     /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
     pub async fn build_async<R: embedded_io_async::Read, W: embedded_io_async::Write>(
         self,
-        io: &mut async_io::IO<R,W>
+        io: &mut async_io::IO<'_, R,W>
     ) -> Result<async_editor::Editor<B, H>, NolineError> {
         async_editor::Editor::new(io).await
     }

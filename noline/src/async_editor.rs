@@ -28,7 +28,7 @@ where
 {
     /// Create and initialize line editor
     pub async fn new<R: embedded_io_async::Read, W: embedded_io_async::Write>(
-        io: &mut IO<R, W>
+        io: &mut IO<'_, R, W>
     ) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
 
@@ -61,7 +61,7 @@ where
 
     async fn handle_output<'b, R: embedded_io_async::Read, W: embedded_io_async::Write> (
         output: Output<'b, B>,
-        io: &mut IO<R, W>,
+        io: &mut IO<'_, R, W>,
     ) -> Result<Option<()>, NolineError> {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
@@ -84,7 +84,7 @@ where
     pub async fn readline<'b, R: embedded_io_async::Read, W: embedded_io_async::Write>(
         &'b mut self,
         prompt: &str,
-        io: &mut IO<R, W>
+        io: &mut IO<'_, R, W>
     ) -> Result<&'b str, NolineError> {
         let mut line = Line::new(
             prompt,

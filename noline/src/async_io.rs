@@ -2,29 +2,29 @@ use crate::error::NolineError;
 /// IO wrapper for stdin and stdout
 use embedded_io_async::Error;
 
-pub struct IO<R, W>
+pub struct IO<'a, R, W>
 where
     R: embedded_io_async::Read,
     W: embedded_io_async::Write,
 {
-    input: R,
-    output: W,
+    input: &'a mut R,
+    output: &'a mut W,
 }
 
-impl<R, W> IO<R, W>
+impl<'a, R, W> IO<'a, R, W>
 where
     R: embedded_io_async::Read,
     W: embedded_io_async::Write,
 {
     /// Create IO wrapper from input and output
-    pub fn new(input: R, output: W) -> Self {
+    pub fn new(input: &'a mut R, output: &'a mut W) -> Self {
         Self { input, output }
     }
 
-    /// Consume wrapper and return input and output as tuple
-    pub fn take(self) -> (R, W) {
-        (self.input, self.output)
-    }
+    // /// Consume wrapper and return input and output as tuple
+    // pub fn take(self) -> (R, W) {
+    //     (self.input, self.output)
+    // }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, NolineError> {
         self.input
