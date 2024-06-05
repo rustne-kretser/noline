@@ -18,11 +18,7 @@ fn main() {
         .build_sync(&mut io)
         .unwrap();
 
-    loop {
-        if let Ok(line) = editor.readline(prompt, &mut io) {
-            write!(io, "Read: '{}'\n\r", line).unwrap();
-        } else {
-            break;
-        }
+    while let Ok(line) = editor.readline(prompt, &mut io) {
+        write!(io, "Read: '{}'\n\r", line).unwrap();
     }
 }

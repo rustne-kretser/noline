@@ -4,22 +4,29 @@ use core::marker::PhantomData;
 
 use crate::{
     error::NolineError,
-    sync_io::IO as SyncIO,
-    async_io::IO as AsyncIO,
     history::{History, NoHistory, StaticHistory},
     line_buffer::{Buffer, NoBuffer, StaticBuffer},
 };
 
-#[cfg(any(test, feature = "alloc", feature = "std"))]
-use crate::line_buffer::UnboundedBuffer;
+#[cfg(any(test, doc, feature = "alloc", feature = "std"))]
+use crate::{
+    line_buffer::UnboundedBuffer,
+    history::UnboundedHistory,
+};
 
-#[cfg(any(test, feature = "alloc", feature = "std"))]
-use crate::history::UnboundedHistory;
+#[cfg(any(test, doc, feature = "sync"))]
+use crate::{
+    sync_io,
+    sync_editor,
+};
 
-#[cfg(any(test, doc, feature = "tokio"))]
-use crate::no_sync;
+#[cfg(any(test, doc, feature = "async"))]
+use crate::{
+    async_io,
+    async_editor,
+ };
 
-/// Builder for [`sync::Editor`] and [`no_sync::tokio::Editor`].
+/// Builder for [`sync_editor::Editor`] and [`async_editor::Editor`].
 ///
 /// # Example
 /// ```no_run
@@ -93,21 +100,22 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
         }
     }
 
-    /// Build [`sync::Editor`]. Is equivalent of calling [`sync::Editor::new()`].
+    #[cfg(any(test, doc, feature = "sync"))]
+    /// Build [`sync_editor::Editor`]. Is equivalent of calling [`sync_editor::Editor::new()`].
     pub fn build_sync<R: embedded_io::Read, W: embedded_io::Write>(
         self,
-        io: &mut SyncIO<R, W>,
-    ) -> Result<crate::sync::Editor<B, H>, NolineError>
+        io: &mut sync_io::IO<R, W>,
+    ) -> Result<sync_editor::Editor<B, H>, NolineError>
     {
-        crate::sync::Editor::new(io)
+        sync_editor::Editor::new(io)
     }
 
-    #[cfg(any(test, doc, feature = "tokio"))]
-    /// Build [`no_sync::tokio::Editor`]. Is equivalent of calling [`no_sync::tokio::Editor::new()`].
+    #[cfg(any(test, doc, feature = "async"))]
+    /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
     pub async fn build_async<R: embedded_io_async::Read, W: embedded_io_async::Write>(
         self,
-        io: &mut AsyncIO<R,W>
-    ) -> Result<no_sync::tokio::Editor<B, H>, NolineError> {
-        no_sync::tokio::Editor::new(io).await
+        io: &mut async_io::IO<R,W>
+    ) -> Result<async_editor::Editor<B, H>, NolineError> {
+        async_editor::Editor::new(io).await
     }
 }

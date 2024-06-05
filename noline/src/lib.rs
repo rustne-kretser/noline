@@ -25,7 +25,7 @@
 //! - [`sync::Editor`] – Editor for asynchronous IO with two separate IO wrappers:
 //!   - [`sync::std::IO`] – IO wrapper for [`std::io::Read`] and [`std::io::Write`] traits
 //!   - [`sync::embedded::IO`] – IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
-//! - [`no_sync::tokio::Editor`] - Editor for [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`]
+//! - [`no_sync::Editor`] - Editor for [`embedded_io_async::Read`] and [`embedded_io_async::Write`]
 //!
 //! Editors can be built using [`builder::EditorBuilder`].
 //!
@@ -63,6 +63,9 @@
 #[cfg(any(test, doc, feature = "std"))]
 #[macro_use]
 extern crate std;
+#[cfg(any(test, doc, feature = "async"))]
+pub mod async_editor;
+#[cfg(any(test, doc, feature = "async"))]
 pub mod async_io;
 pub mod builder;
 mod core;
@@ -70,9 +73,10 @@ pub mod error;
 pub mod history;
 mod input;
 pub mod line_buffer;
-pub mod no_sync;
 mod output;
-pub mod sync;
+#[cfg(any(test, doc, feature = "sync"))]
+pub mod sync_editor;
+#[cfg(any(test, doc, feature = "sync"))]
 pub mod sync_io;
 pub(crate) mod terminal;
 mod utf8;

@@ -15,13 +15,8 @@ async fn main() {
         .await
         .unwrap();
 
-    loop {
-        if let Ok(line) = editor.readline(prompt, &mut io).await {
-            let s = format!("Read: '{}'\n\r", line);
-            io.write(s.as_bytes()).await.unwrap();
-            println!("Read {}", line);
-        } else {
-            break;
-        }
-    }
+    while let Ok(line) = editor.readline(prompt, &mut io).await {
+        let s = format!("Read: '{}'\n\r", line);
+        io.write(s.as_bytes()).await.unwrap();
+    } 
 }
