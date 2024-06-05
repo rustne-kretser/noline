@@ -1,25 +1,25 @@
 use noline::builder::EditorBuilder;
 use termion::raw::IntoRawMode;
-use tokio::io::{self, AsyncWriteExt};
+use noline::async_io::{IO, async_std::{StdinWrapper, StdoutWrapper}};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let _raw_term = std::io::stdout().into_raw_mode().unwrap();
-    let mut stdin = io::stdin();
-    let mut stdout = io::stdout();
+    let mut io = IO::new(StdinWrapper::default(), StdoutWrapper::default());
 
     let prompt = "> ";
 
     let mut editor = EditorBuilder::new_unbounded()
         .with_unbounded_history()
-        .build_async_tokio(&mut stdin, &mut stdout)
+        .build_async(&mut io)
         .await
         .unwrap();
 
     loop {
-        if let Ok(line) = editor.readline(prompt, &mut stdin, &mut stdout).await {
+        if let Ok(line) = editor.readline(prompt, &mut io).await {
             let s = format!("Read: '{}'\n\r", line);
-            stdout.write_all(s.as_bytes()).await.unwrap();
+            io.write(s.as_bytes()).await.unwrap();
+            println!("Read {}", line);
         } else {
             break;
         }

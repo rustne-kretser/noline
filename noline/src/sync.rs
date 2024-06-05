@@ -5,34 +5,33 @@
 //!
 //! Use the [`crate::builder::EditorBuilder`] to build an editor.
 use crate::error::NolineError;
-use core::marker::PhantomData;
 
 use crate::history::{get_history_entries, CircularSlice, History};
 use crate::line_buffer::{Buffer, LineBuffer};
 
 use crate::core::{Initializer, InitializerResult, Line};
 use crate::output::{Output, OutputItem};
-use crate::sync_io::SyncIO;
+use crate::sync_io::IO;
 use crate::terminal::Terminal;
 
 /// Line editor for synchronous IO
 ///
 /// It is recommended to use [`crate::builder::EditorBuilder`] to build an Editor.
-pub struct Editor<B: Buffer, H: History, IO: SyncIO> {
+pub struct Editor<B: Buffer, H: History> {
     buffer: LineBuffer<B>,
     terminal: Terminal,
     history: H,
-    _marker: PhantomData<IO>,
 }
 
-impl<B, H, IO> Editor<B, H, IO>
+impl<B, H> Editor<B, H>
 where
     B: Buffer,
     H: History,
-    IO: SyncIO,
 {
     /// Create and initialize line editor
-    pub fn new(io: &mut dyn SyncIO) -> Result<Self, NolineError> {
+    pub fn new<R: embedded_io::Read, W: embedded_io::Write>(
+        io: &mut IO<R, W>,
+    ) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
 
         io.write(Initializer::init())?;
@@ -61,13 +60,12 @@ where
             buffer: LineBuffer::new(),
             terminal,
             history: H::default(),
-            _marker: PhantomData,
         })
     }
 
-    fn handle_output<'b>(
+    fn handle_output<'b, R: embedded_io::Read, W: embedded_io::Write>(
         output: Output<'b, B>,
-        io: &mut dyn SyncIO,
+        io: &mut IO<R, W>,
     ) -> Result<Option<()>, NolineError> {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
@@ -87,10 +85,10 @@ where
     }
 
     /// Read line from `stdin`
-    pub fn readline<'b>(
+    pub fn readline<'b, R: embedded_io::Read, W: embedded_io::Write>(
         &'b mut self,
         prompt: &'b str,
-        io: &mut dyn SyncIO,
+        io: &mut IO<R, W>,
     ) -> Result<&'b str, NolineError> {
         let mut line = Line::new(
             prompt,

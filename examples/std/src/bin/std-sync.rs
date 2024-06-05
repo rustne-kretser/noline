@@ -8,8 +8,7 @@ use std::io;
 use termion::raw::IntoRawMode;
 
 fn main() {
-    let stdin = io::stdin();
-    let stdout = io::stdout().into_raw_mode().unwrap();
+    let _stdout = io::stdout().into_raw_mode().unwrap();
     let prompt = "> ";
 
     let mut io = IO::<StdinWrapper, StdoutWrapper>::default();

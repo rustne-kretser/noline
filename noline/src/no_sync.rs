@@ -5,12 +5,12 @@ pub mod tokio {
     //! Implementation for tokio
 
     use crate::{
-        async_io::ASyncIO,
+        async_io::IO,
         core::{Initializer, InitializerResult, Line},
         error::NolineError,
         history::{get_history_entries, CircularSlice, History},
         line_buffer::{Buffer, LineBuffer},
-        output::OutputItem,
+        output::{Output, OutputItem},
         terminal::Terminal,
     };
 
@@ -29,22 +29,28 @@ pub mod tokio {
         H: History,
     {
         /// Create and initialize line editor
-        pub async fn new(
-            read: &mut dyn embedded_io_async::Read,
-            write: &mut dyn embedded_io_async::Write,
+        pub async fn new<R: embedded_io_async::Read, W: embedded_io_async::Write>(
+            io: &mut IO<R, W>
         ) -> Result<Self, NolineError> {
             let mut initializer = Initializer::new();
 
-            write.write(Initializer::init()).await?;
-            write.flush().await?;
+            io.write(Initializer::init()).await?;
+
+            io.flush().await?;
 
             let terminal = loop {
-                let byte = read.read().await?;
+                let mut buf = [0u8; 1];
+                let len = io.read(&mut buf).await?;
 
-                match initializer.advance(byte) {
-                    InitializerResult::Continue => (),
-                    InitializerResult::Item(terminal) => break terminal,
-                    InitializerResult::InvalidInput => return Err(NolineError::ParserError),
+                if len == 1 {
+                    match initializer.advance(buf[0]) {
+                        InitializerResult::Continue => (),
+                        InitializerResult::Item(terminal) => break terminal,
+                        InitializerResult::InvalidInput => return Err(NolineError::ParserError),
+                    }
+                }
+                if len == 0 {
+                    return Err(NolineError::Aborted);
                 }
             };
 
@@ -55,11 +61,32 @@ pub mod tokio {
             })
         }
 
+        async fn handle_output<'b, R: embedded_io_async::Read, W: embedded_io_async::Write> (
+            output: Output<'b, B>,
+            io: &mut IO<R, W>,
+        ) -> Result<Option<()>, NolineError> {
+            for item in output {
+                if let Some(bytes) = item.get_bytes() {
+                    io.write(bytes).await?;
+                }
+    
+                io.flush().await?;
+    
+                match item {
+                    OutputItem::EndOfString => return Ok(Some(())),
+                    OutputItem::Abort => return Err(NolineError::Aborted),
+                    _ => (),
+                }
+            }
+    
+            Ok(None)
+        }
+    
         /// Read line from `stdin`
-        pub async fn readline<'b>(
+        pub async fn readline<'b, R: embedded_io_async::Read, W: embedded_io_async::Write>(
             &'b mut self,
             prompt: &str,
-            io: &mut dyn ASyncIO,
+            io: &mut IO<R, W>
         ) -> Result<&'b str, NolineError> {
             let mut line = Line::new(
                 prompt,
@@ -67,38 +94,55 @@ pub mod tokio {
                 &mut self.terminal,
                 &mut self.history,
             );
+            Self::handle_output(line.reset(), io).await?;
 
-            for output in line.reset() {
-                io.write(output.get_bytes().unwrap_or_else(|| unreachable!())).await?;
-            }
-
-            io.flush().await?;
-
-            let end_of_string = 'outer: loop {
-                let b = io.read().await?;
-
-                for item in line.advance(b) {
-                    if let Some(bytes) = item.get_bytes() {
-                        io.write(bytes).await?;
-                    }
-
-                    match item {
-                        OutputItem::EndOfString => break 'outer true,
-                        OutputItem::Abort => break 'outer false,
-                        _ => (),
+            loop {
+                let mut buf = [0x8; 1];
+                let len = io.read(&mut buf).await?;
+                //.map_err(|e| e.kind().into())?;
+                if len == 1 {
+                    if Self::handle_output(line.advance(buf[0]), io).await?.is_some() {
+                        break;
                     }
                 }
-
-                io.flush().await?;
-            };
-
-            io.flush().await?;
-
-            if end_of_string {
-                Ok(self.buffer.as_str())
-            } else {
-                Err(NolineError::Aborted)
             }
+    
+            Ok(self.buffer.as_str())
+    
+            // for output in line.reset() {
+            //     io.write(output.get_bytes().unwrap_or_else(|| unreachable!())).await?;
+            // }
+
+            // io.flush().await?;
+
+            // let end_of_string = 'outer: loop {
+            //     let mut buf = [0x8; 1];
+            //     let len = io.read(&mut buf).await?;
+
+            //     if len == 0 {
+            //         for item in line.advance(buf[0]) {
+            //             if let Some(bytes) = item.get_bytes() {
+            //                 io.write(bytes).await?;
+            //             }
+
+            //             match item {
+            //                 OutputItem::EndOfString => break 'outer true,
+            //                 OutputItem::Abort => break 'outer false,
+            //                 _ => (),
+            //             }
+            //         }
+            //     }
+
+            //     io.flush().await?;
+            // };
+
+            // io.flush().await?;
+
+            // if end_of_string {
+            //     Ok(self.buffer.as_str())
+            // } else {
+            //     Err(NolineError::Aborted)
+            // }
         }
 
         /// Load history from iterator
