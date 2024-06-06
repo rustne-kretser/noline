@@ -358,10 +358,10 @@ impl<'a, H: History> HistoryNavigator<'a, H> {
     }
 
     pub(crate) fn move_down<'b>(&'b mut self) -> Result<CircularSlice<'b>, ()> {
-        let position = self.get_position();
+        let new_position = self.get_position() + 1;
 
-        if position < self.history.number_of_entries() - 1 {
-            let position = self.set_position(position + 1);
+        if new_position < self.history.number_of_entries() {
+            let position = self.set_position(new_position);
 
             Ok(self.history.get_entry(position).unwrap())
         } else {
@@ -578,5 +578,22 @@ mod tests {
             history.get_entries().collect::<Vec<String>>(),
             vec!["abc", "defgh"]
         );
+    }
+
+    #[test]
+    fn navigator() {
+        let mut history = UnboundedHistory::new();
+        let mut navigator = HistoryNavigator::new(&mut history);
+
+        assert!(navigator.move_up().is_err());
+        assert!(navigator.move_down().is_err());
+
+        navigator.history.add_entry("line 1");
+        navigator.reset();
+
+        assert!(navigator.move_up().is_ok());
+        assert!(navigator.move_up().is_err());
+
+        assert!(navigator.move_down().is_err());
     }
 }

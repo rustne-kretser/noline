@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Added Linefeed as a valid line terminator
+- Fixed overflow error when attempting to navigate empty history
 
 ## [0.2.0] - 2022-03-22
 
