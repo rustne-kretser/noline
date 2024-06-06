@@ -49,7 +49,7 @@
 //!         .unwrap();
 //!
 //!     loop {
-//!         if let Ok(line) = editor.readline(prompt, &mut io) {
+//!         if let Ok(line) = editor.readline(prompt, &mut io, ()) {
 //!             write!(io, "Read: '{}'\n\r", line).unwrap();
 //!         } else {
 //!             break;
@@ -64,6 +64,7 @@
 #[macro_use]
 extern crate std;
 pub mod builder;
+pub mod complete;
 mod core;
 pub mod error;
 pub mod history;
