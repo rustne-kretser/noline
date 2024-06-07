@@ -7,14 +7,12 @@ use embassy_usb::{Builder, Config};
 
 use crate::noline_async::cli;
 
-
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
 });
 
 #[embassy_executor::task]
 pub async fn usb_handler(usb: USB) {
-
     // Create the driver, from the HAL.
     let driver = Driver::new(usb, Irqs);
 
@@ -56,12 +54,11 @@ pub async fn usb_handler(usb: USB) {
     // Create classes on the builder.
     let serial = CdcAcmClass::new(&mut builder, &mut state, 64);
 
-    let (mut send, mut recv) = serial.split();
+    let (mut send, mut recv, mut control) = serial.split_with_control();
 
     let noline_fut = async {
-        let _ = cli(&mut send, &mut recv).await;
+        let _ = cli(&mut send, &mut recv, &mut control).await;
     };
-
 
     // Build the builder.
     let mut usb = builder.build();
@@ -69,7 +66,6 @@ pub async fn usb_handler(usb: USB) {
     // Run the USB device.
     let usb_fut = usb.run();
 
-    
     // Run everything concurrently.
     // If we had made everything `'static` above instead, we could do this using separate tasks instead.
     join(usb_fut, noline_fut).await;

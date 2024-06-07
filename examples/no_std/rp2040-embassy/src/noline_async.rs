@@ -1,23 +1,18 @@
 use core::fmt::Write as FmtWrite;
-
 use defmt::info;
 use embassy_futures::block_on;
 use embassy_rp::usb::{Driver, Instance};
 use embassy_usb::{
-    class::cdc_acm::{Receiver, Sender},
+    class::cdc_acm::{ControlChanged, Receiver, Sender},
     driver::EndpointError,
 };
-use fixed_queue::VecDeque;
-use noline::{
-    builder::EditorBuilder,
-    async_io::IO,
-};
 use embedded_io_async::Write;
+use fixed_queue::VecDeque;
+use noline::{async_io::IO, builder::EditorBuilder};
 
-fn map_error(e: EndpointError) -> embedded_io_async::ErrorKind {
+fn map_error(_e: EndpointError) -> embedded_io_async::ErrorKind {
     embedded_io_async::ErrorKind::Other
 }
-
 
 // Implement the reader struct
 struct Reader<'d, I: Instance> {
@@ -26,9 +21,12 @@ struct Reader<'d, I: Instance> {
 }
 
 // Exposte the wait_connection function from the borrowd stdin
-impl<'d, R: Instance> Reader<'d, R> {
+impl<'d, R: Instance> Writer<'d, R> {
+    fn ready(&self) -> bool {
+        self.stdout.rts() && self.stdout.dtr()
+    }
     async fn wait_connection(&mut self) {
-        self.stdin.wait_connection().await
+        self.stdout.wait_connection().await
     }
 }
 
@@ -43,7 +41,11 @@ impl<'d, R: Instance> embedded_io_async::Read for Reader<'d, R> {
         while self.queue.is_empty() {
             let mut buf: [u8; 64] = [0; 64];
             // Read a maximum of 64 bytes from the ouput
-            let len = self.stdin.read_packet(&mut buf).await.map_err(|e| map_error(e))?;
+            let len = self
+                .stdin
+                .read_packet(&mut buf)
+                .await
+                .map_err(|e| map_error(e))?;
             // This is safe because we only ever pull data when empty
             // And the queue has the same capacity as the input buffer
             for i in buf.iter().take(len) {
@@ -83,12 +85,24 @@ impl<'d, R: Instance> embedded_io_async::Write for Writer<'d, R> {
     }
 }
 
+// We need to use the New Type idiom to enable us to implement FmtWrite for IO
+struct MyIO<'a, R: embedded_io_async::Read, W: embedded_io_async::Write>(IO<'a, R, W>);
+impl<'a, R: embedded_io_async::Read, W: embedded_io_async::Write> MyIO<'a, R, W> {
+    fn new(read: &'a mut R, write: &'a mut W) -> Self {
+        Self(IO::new(read, write))
+    }
+}
+
 // Formatted output for the Writer which allows us to use the writeln! macro directly
-impl<'d, W: Instance> FmtWrite for Writer<'d, W> {
+impl<'a, R, W> FmtWrite for MyIO<'a, R, W>
+where
+    R: embedded_io_async::Read,
+    W: embedded_io_async::Write,
+{
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let data = s.as_bytes();
 
-        block_on(self.write(data)).map_err(|_| core::fmt::Error {})?;
+        block_on(self.0.write(data)).map_err(|_| core::fmt::Error {})?;
 
         Ok(())
     }
@@ -97,6 +111,7 @@ impl<'d, W: Instance> FmtWrite for Writer<'d, W> {
 pub async fn cli<'d, T: Instance + 'd>(
     send: &'d mut Sender<'d, Driver<'d, T>>,
     recv: &'d mut Receiver<'d, Driver<'d, T>>,
+    control: &'d mut ControlChanged<'d>,
 ) {
     let prompt = "> ";
 
@@ -107,22 +122,22 @@ pub async fn cli<'d, T: Instance + 'd>(
     let mut stdout: Writer<'d, T> = Writer { stdout: send };
 
     loop {
-        stdin.wait_connection().await;
-        info!("Connected");
+        stdout.wait_connection().await;
 
-        let mut io = IO::new(&mut stdin, &mut stdout);
+        while !stdout.ready() {
+            control.control_changed().await;
+        }
+
+        let mut io = MyIO::new(&mut stdin, &mut stdout);
 
         let mut editor = EditorBuilder::new_static::<64>()
             .with_static_history::<8>()
-            .build_async(&mut io)
+            .build_async(&mut io.0)
             .await
             .unwrap();
 
-        if let Ok(line) = editor.readline(prompt, &mut io).await {
-            match writeln!(stdout, "READ: {}", line) {
-                Ok(()) => {},
-                Err(_e) => {},
-            }
+        while let Ok(line) = editor.readline(prompt, &mut io.0).await {
+            let _ = writeln!(io, "READ: {}", line);
         }
     }
 }

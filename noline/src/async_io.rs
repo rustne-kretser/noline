@@ -28,28 +28,31 @@ where
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, NolineError> {
         self.input
-            .read(buf).await
+            .read(buf)
+            .await
             .map_err(|e| NolineError::ReadError(e.kind().into()))
     }
 
     pub async fn write(&mut self, buf: &[u8]) -> Result<(), NolineError> {
         self.output
-            .write_all(buf).await
+            .write_all(buf)
+            .await
             .map_err(|e| NolineError::WriteError(e.kind().into()))
     }
 
     pub async fn flush(&mut self) -> Result<(), NolineError> {
         self.output
-            .flush().await
+            .flush()
+            .await
             .map_err(|e| NolineError::WriteError(e.kind().into()))
     }
 }
 
 #[cfg(any(test, feature = "std"))]
 pub mod async_std {
-//    use super::*;
-//    use core::fmt;
-    use async_std::io::{stdin, stdout, Stdin, Stdout, WriteExt, ReadExt};
+    //    use super::*;
+    //    use core::fmt;
+    use async_std::io::{stdin, stdout, ReadExt, Stdin, Stdout, WriteExt};
 
     // Wrapper for std::io::stdin
     pub struct StdinWrapper(Stdin);
@@ -69,7 +72,11 @@ pub mod async_std {
     impl embedded_io_async::Read for StdinWrapper {
         async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
             let mut b = [0];
-            let _ = self.0.read_exact(&mut b).await.map_err(|e| Self::Error::from(e.kind()))?;
+            let _ = self
+                .0
+                .read_exact(&mut b)
+                .await
+                .map_err(|e| Self::Error::from(e.kind()))?;
             buf[0] = b[0];
             Ok(1)
         }

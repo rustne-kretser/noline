@@ -28,7 +28,7 @@ where
 {
     /// Create and initialize line editor
     pub async fn new<R: embedded_io_async::Read, W: embedded_io_async::Write>(
-        io: &mut IO<'_, R, W>
+        io: &mut IO<'_, R, W>,
     ) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
 
@@ -59,7 +59,7 @@ where
         })
     }
 
-    async fn handle_output<'b, R: embedded_io_async::Read, W: embedded_io_async::Write> (
+    async fn handle_output<'b, R: embedded_io_async::Read, W: embedded_io_async::Write>(
         output: Output<'b, B>,
         io: &mut IO<'_, R, W>,
     ) -> Result<Option<()>, NolineError> {
@@ -67,24 +67,24 @@ where
             if let Some(bytes) = item.get_bytes() {
                 io.write(bytes).await?;
             }
-    
+
             io.flush().await?;
-    
+
             match item {
                 OutputItem::EndOfString => return Ok(Some(())),
                 OutputItem::Abort => return Err(NolineError::Aborted),
                 _ => (),
             }
         }
-    
+
         Ok(None)
     }
-    
+
     /// Read line from `stdin`
     pub async fn readline<'b, R: embedded_io_async::Read, W: embedded_io_async::Write>(
         &'b mut self,
         prompt: &str,
-        io: &mut IO<'_, R, W>
+        io: &mut IO<'_, R, W>,
     ) -> Result<&'b str, NolineError> {
         let mut line = Line::new(
             prompt,
@@ -93,18 +93,20 @@ where
             &mut self.history,
         );
         Self::handle_output(line.reset(), io).await?;
-         loop {
+        loop {
             let mut buf = [0x8; 1];
             let len = io.read(&mut buf).await?;
             if len == 1 {
-                if Self::handle_output(line.advance(buf[0]), io).await?.is_some() {
+                if Self::handle_output(line.advance(buf[0]), io)
+                    .await?
+                    .is_some()
+                {
                     break;
                 }
             }
         }
-    
+
         Ok(self.buffer.as_str())
-  
     }
 
     /// Load history from iterator
@@ -117,4 +119,3 @@ where
         get_history_entries(&self.history)
     }
 }
-
