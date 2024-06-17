@@ -74,59 +74,47 @@ pub mod std_sync {
     use core::fmt;
     use std::io::{Read, Stdin, Stdout, Write};
 
-    // Wrapper for std::io::stdin
-    pub struct StdinWrapper(std::io::Stdin);
-    impl StdinWrapper {
+    pub struct StdIOWrapper {
+        stdin: Stdin,
+        stdout: Stdout,
+    }
+    impl StdIOWrapper {
         pub fn new() -> Self {
-            Self(std::io::stdin())
-        }
-        pub fn new_with(val: Stdin) -> Self {
-            Self(val)
+            Self {
+                stdin: std::io::stdin(),
+                stdout: std::io::stdout(),
+            }
         }
     }
-    impl Default for StdinWrapper {
+
+    impl Default for StdIOWrapper {
         fn default() -> Self {
             Self::new()
         }
     }
-    impl embedded_io::ErrorType for StdinWrapper {
+
+    impl embedded_io::ErrorType for StdIOWrapper {
         type Error = embedded_io::ErrorKind;
     }
-    impl embedded_io::Read for StdinWrapper {
+
+    impl embedded_io::Read for StdIOWrapper {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
             let mut b = [0];
             let _ = self
-                .0
+                .stdin
                 .read_exact(&mut b)
                 .map_err(|e| Self::Error::from(e.kind()))?;
             buf[0] = b[0];
             Ok(1)
         }
     }
-    // Wrapper for std::io::stdout
-    pub struct StdoutWrapper(std::io::Stdout);
-    impl StdoutWrapper {
-        pub fn new() -> Self {
-            Self(std::io::stdout())
-        }
-        pub fn new_with(val: Stdout) -> Self {
-            Self(val)
-        }
-    }
-    impl Default for StdoutWrapper {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-    impl embedded_io::ErrorType for StdoutWrapper {
-        type Error = embedded_io::ErrorKind;
-    }
-    impl embedded_io::Write for StdoutWrapper {
+
+    impl embedded_io::Write for StdIOWrapper {
         fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-            self.0.write(buf).map_err(|e| e.kind().into())
+            self.stdout.write(buf).map_err(|e| e.kind().into())
         }
         fn flush(&mut self) -> Result<(), Self::Error> {
-            self.0.flush().map_err(|e| e.kind().into())
+            self.stdout.flush().map_err(|e| e.kind().into())
         }
     }
 }
