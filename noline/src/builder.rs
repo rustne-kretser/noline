@@ -21,18 +21,21 @@ use crate::{async_editor, async_io};
 ///
 /// # Example
 /// ```no_run
-/// # use noline::sync::{Read, Write};
-/// # struct IO {}
-/// # impl Write for IO {
-/// #     type Error = ();
-/// #     fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> { unimplemented!() }
+/// # use embedded_io::{Read, Write, ErrorType};
+/// # use noline::sync_io::IO;
+/// # use core::convert::Infallible;
+/// # struct MyIO {}
+/// # impl ErrorType for MyIO {
+/// #     type Error = Infallible;
+/// # }
+/// # impl Write for MyIO {
+/// #     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> { unimplemented!() }
 /// #     fn flush(&mut self) -> Result<(), Self::Error> { unimplemented!() }
 /// # }
-/// # impl Read for IO {
-/// #     type Error = ();
-/// #     fn read(&mut self) -> Result<u8, Self::Error> { unimplemented!() }
+/// # impl Read for MyIO {
+/// #     fn read(&mut self, buf: &mut[u8]) -> Result<usize, Self::Error> { unimplemented!() }
 /// # }
-/// # let mut io = IO {};
+/// # let mut io = IO::new(MyIO {});
 /// use noline::builder::EditorBuilder;
 ///
 /// let mut editor = EditorBuilder::new_static::<100>()

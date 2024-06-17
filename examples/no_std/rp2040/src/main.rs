@@ -147,10 +147,10 @@ fn main() -> ! {
     ));
 
     // Set up the USB Communications Class Device driver
-    let mut serial = SerialPort::new(&usb_bus);
+    let serial = SerialPort::new(&usb_bus);
 
     // Create a USB device with a fake VID and PID
-    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
+    let usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
         .strings(&[StringDescriptors::default()
             .manufacturer("Fake company")
             .product("Serial port")

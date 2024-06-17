@@ -133,17 +133,18 @@ mod tests {
     use crate::builder::EditorBuilder;
 
     use super::*;
+    use core::convert::Infallible;
     use crossbeam::channel::{unbounded, Receiver, Sender};
     use std::string::ToString;
     use std::{thread, vec::Vec};
 
-    struct IO {
+    struct TestSyncIO {
         input: Receiver<u8>,
         buffer: Vec<u8>,
         output: Sender<u8>,
     }
 
-    impl IO {
+    impl TestSyncIO {
         fn new(input: Receiver<u8>, output: Sender<u8>) -> Self {
             Self {
                 input,
@@ -153,14 +154,16 @@ mod tests {
         }
     }
 
-    impl Write for IO {
-        type Error = ();
+    impl embedded_io::ErrorType for TestSyncIO {
+        type Error = Infallible;
+    }
 
-        fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+    impl embedded_io::Write for TestSyncIO {
+        fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
             dbg!(buf);
             self.buffer.extend(buf.iter());
 
-            Ok(())
+            Ok(buf.len())
         }
 
         fn flush(&mut self) -> Result<(), Self::Error> {
@@ -172,11 +175,15 @@ mod tests {
         }
     }
 
-    impl Read for IO {
-        type Error = ();
-
-        fn read(&mut self) -> Result<u8, Self::Error> {
-            Ok(self.input.recv().or_else(|_| Err(()))?)
+    impl embedded_io::Read for TestSyncIO {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            match self.input.recv() {
+                Ok(byte) => {
+                    buf[0] = byte;
+                    Ok(1)
+                }
+                Err(_) => Ok(0),
+            }
         }
     }
 
@@ -185,7 +192,7 @@ mod tests {
         let (input_tx, input_rx) = unbounded();
         let (output_tx, output_rx) = unbounded();
 
-        let mut io = IO::new(input_rx, output_tx);
+        let mut io = IO::new(TestSyncIO::new(input_rx, output_tx));
 
         let handle = thread::spawn(move || {
             let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
@@ -226,21 +233,21 @@ mod tests {
 }
 
 #[cfg(any(test, feature = "std"))]
-pub mod std {
+pub mod std_tests {
     //! IO implementation for `std`. Requires feature `std`.
 
     #[cfg(test)]
     mod tests {
+        use core::convert::Infallible;
         use std::string::ToString;
         use std::{thread, vec::Vec};
 
         use crossbeam::channel::{unbounded, Receiver, Sender};
+        use embedded_io::{Read, Write};
 
         use crate::builder::EditorBuilder;
+        use crate::sync_io::IO;
         use crate::testlib::{test_cases, test_editor_with_case, MockTerminal};
-        use std::io::Read as IoRead;
-
-        use super::*;
 
         struct MockStdout {
             buffer: Vec<u8>,
@@ -287,12 +294,17 @@ pub mod std {
             }
         }
 
-        impl io::Read for MockStdin {
-            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        impl embedded_io::ErrorType for MockIO {
+            type Error = embedded_io::ErrorKind;
+        }
+
+        impl embedded_io::Read for MockIO {
+            fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
                 for i in 0..(buf.len()) {
-                    match self.rx.recv() {
+                    match self.stdin.rx.recv() {
                         Ok(byte) => buf[i] = byte,
-                        Err(_) => return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+                        // This should never happen as the error type is Infalliable
+                        Err(_) => return Err(Self::Error::Other),
                     }
                 }
 
@@ -300,15 +312,15 @@ pub mod std {
             }
         }
 
-        impl io::Write for MockStdout {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.buffer.extend(buf);
+        impl embedded_io::Write for MockIO {
+            fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+                self.stdout.buffer.extend(buf);
                 Ok(buf.len())
             }
 
-            fn flush(&mut self) -> std::io::Result<()> {
-                for byte in self.buffer.drain(0..) {
-                    self.tx.send(byte).unwrap();
+            fn flush(&mut self) -> Result<(), Self::Error> {
+                for byte in self.stdout.buffer.drain(0..) {
+                    self.stdout.tx.send(byte).unwrap();
                 }
 
                 Ok(())
@@ -319,15 +331,16 @@ pub mod std {
         fn mock_stdin() {
             let (tx, rx) = unbounded();
 
-            let mut stdin = MockStdin::new(rx);
-
-            for i in 0..10 {
-                tx.send(i).unwrap();
+            let mut io = MockIO::new(MockStdin::new(rx), MockStdout::new(tx));
+            for i in 0u8..10 {
+                io.write(&[i]).unwrap();
             }
 
+            io.flush().unwrap();
+
+            let mut buf = [0];
             for i in 0..10 {
-                let mut buf = [0];
-                stdin.read_exact(&mut buf).unwrap();
+                io.read(&mut buf).unwrap();
 
                 assert_eq!(buf[0], i);
             }
@@ -344,7 +357,7 @@ pub mod std {
                     |term| MockIO::from_terminal(term).get_pipes(),
                     |(stdin, stdout), string_tx| {
                         thread::spawn(move || {
-                            let mut io = IO::new(stdin, stdout);
+                            let mut io = IO::new(MockIO::new(stdin, stdout));
                             let mut editor = EditorBuilder::new_unbounded()
                                 .with_unbounded_history()
                                 .build_sync(&mut io)
@@ -361,7 +374,7 @@ pub mod std {
     }
 }
 
-#[cfg(any(test, feature = "embedded"))]
+#[cfg(any(test2, feature = "embedded"))]
 pub mod embedded {
     //! IO implementation using traits from [`embedded_io`]. Requires feature `embedded`.
 
@@ -410,8 +423,6 @@ pub mod embedded {
         }
 
         impl serial::Read<u8> for MockSerial {
-            type Error = ();
-
             fn read(&mut self) -> nb::Result<u8, Self::Error> {
                 match self.rx.try_recv() {
                     Ok(byte) => Ok(byte),

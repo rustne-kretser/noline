@@ -31,7 +31,7 @@
 //!
 //! # Example
 //! ```no_run
-//! use noline::{sync::std::IO, builder::EditorBuilder};
+//! use noline::{builder::EditorBuilder, sync_io::std_sync::StdIOWrapper, sync_io::IO};
 //! use std::fmt::Write;
 //! use std::io;
 //! use termion::raw::IntoRawMode;
@@ -41,7 +41,7 @@
 //!     let stdout = io::stdout().into_raw_mode().unwrap();
 //!     let prompt = "> ";
 //!
-//!     let mut io = IO::new(stdin, stdout);
+//!     let mut io = IO::<StdIOWrapper>::new(StdIOWrapper::new());
 //!
 //!     let mut editor = EditorBuilder::new_unbounded()
 //!         .with_unbounded_history()

@@ -1,4 +1,3 @@
-use embedded_io_async::Write;
 use noline::async_io::{
     async_std::{StdinWrapper, StdoutWrapper},
     IO,

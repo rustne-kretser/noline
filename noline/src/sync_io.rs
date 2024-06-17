@@ -68,10 +68,8 @@ where
     }
 }
 
-#[cfg(any(test, feature = "std"))]
+#[cfg(any(test, doctest, feature = "std"))]
 pub mod std_sync {
-    use super::*;
-    use core::fmt;
     use std::io::{Read, Stdin, Stdout, Write};
 
     pub struct StdIOWrapper {
@@ -99,22 +97,20 @@ pub mod std_sync {
 
     impl embedded_io::Read for StdIOWrapper {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-            let mut b = [0];
             let _ = self
                 .stdin
-                .read_exact(&mut b)
-                .map_err(|e| Self::Error::from(e.kind()))?;
-            buf[0] = b[0];
+                .read_exact(&mut buf[0..1])
+                .map_err(|e| e.kind())?;
             Ok(1)
         }
     }
 
     impl embedded_io::Write for StdIOWrapper {
         fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-            self.stdout.write(buf).map_err(|e| e.kind().into())
+            Ok(self.stdout.write(buf).map_err(|e| e.kind())?)
         }
         fn flush(&mut self) -> Result<(), Self::Error> {
-            self.stdout.flush().map_err(|e| e.kind().into())
+            Ok(self.stdout.flush().map_err(|e| e.kind())?)
         }
     }
 }

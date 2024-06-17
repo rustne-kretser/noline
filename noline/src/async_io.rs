@@ -48,7 +48,7 @@ where
     }
 }
 
-#[cfg(any(test, feature = "std"))]
+#[cfg(feature = "std")]
 pub mod async_std {
     //    use super::*;
     //    use core::fmt;
@@ -104,14 +104,4 @@ pub mod async_std {
             self.0.flush().await.map_err(|e| e.kind().into())
         }
     }
-
-    // impl<R, W> fmt::Write for IO<R, W>
-    // where
-    //     R: embedded_io_async::Read,
-    //     W: embedded_io_async::Write,
-    // {
-    //     fn write_str(&mut self, s: &str) -> fmt::Result {
-    //         self.write(s.as_bytes()).await.or(Err(fmt::Error))
-    //     }
-    // }
 }
