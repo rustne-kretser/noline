@@ -4,6 +4,8 @@
 //! traits. There are ready made implementations in [`std::IO`] and [`embedded::IO`].
 //!
 //! Use the [`crate::builder::EditorBuilder`] to build an editor.
+use embedded_io::{Read, Write};
+
 use crate::error::NolineError;
 
 use crate::history::{get_history_entries, CircularSlice, History};
@@ -17,7 +19,11 @@ use crate::terminal::Terminal;
 /// Line editor for synchronous IO
 ///
 /// It is recommended to use [`crate::builder::EditorBuilder`] to build an Editor.
-pub struct Editor<B: Buffer, H: History> {
+pub struct Editor<B, H>
+where
+    B: Buffer,
+    H: History,
+{
     buffer: LineBuffer<B>,
     terminal: Terminal,
     history: H,
@@ -29,8 +35,8 @@ where
     H: History,
 {
     /// Create and initialize line editor
-    pub fn new<R: embedded_io::Read, W: embedded_io::Write>(
-        io: &mut IO<R, W>,
+    pub fn new<RW: embedded_io::Read + embedded_io::Write>(
+        io: &mut IO<RW>,
     ) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
 
@@ -63,9 +69,9 @@ where
         })
     }
 
-    fn handle_output<'b, R: embedded_io::Read, W: embedded_io::Write>(
+    fn handle_output<'b, RW: embedded_io::Read + embedded_io::Write>(
         output: Output<'b, B>,
-        io: &mut IO<R, W>,
+        io: &mut IO<RW>,
     ) -> Result<Option<()>, NolineError> {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
@@ -85,10 +91,10 @@ where
     }
 
     /// Read line from `stdin`
-    pub fn readline<'b, R: embedded_io::Read, W: embedded_io::Write>(
+    pub fn readline<'b, RW: embedded_io::Read + embedded_io::Write>(
         &'b mut self,
         prompt: &'b str,
-        io: &mut IO<R, W>,
+        io: &mut IO<RW>,
     ) -> Result<&'b str, NolineError> {
         let mut line = Line::new(
             prompt,

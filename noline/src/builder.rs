@@ -9,22 +9,13 @@ use crate::{
 };
 
 #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
-use crate::{
-    line_buffer::UnboundedBuffer,
-    history::UnboundedHistory,
-};
+use crate::{history::UnboundedHistory, line_buffer::UnboundedBuffer};
 
 #[cfg(any(test, doc, feature = "sync"))]
-use crate::{
-    sync_io,
-    sync_editor,
-};
+use crate::{sync_editor, sync_io};
 
 #[cfg(any(test, doc, feature = "async"))]
-use crate::{
-    async_io,
-    async_editor,
- };
+use crate::{async_editor, async_io};
 
 /// Builder for [`sync_editor::Editor`] and [`async_editor::Editor`].
 ///
@@ -102,11 +93,10 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
 
     #[cfg(any(test, doc, feature = "sync"))]
     /// Build [`sync_editor::Editor`]. Is equivalent of calling [`sync_editor::Editor::new()`].
-    pub fn build_sync<R: embedded_io::Read, W: embedded_io::Write>(
+    pub fn build_sync<RW: embedded_io::Read + embedded_io::Write>(
         self,
-        io: &mut sync_io::IO<R, W>,
-    ) -> Result<sync_editor::Editor<B, H>, NolineError>
-    {
+        io: &mut sync_io::IO<RW>,
+    ) -> Result<sync_editor::Editor<B, H>, NolineError> {
         sync_editor::Editor::new(io)
     }
 
@@ -114,7 +104,7 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
     /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
     pub async fn build_async<R: embedded_io_async::Read, W: embedded_io_async::Write>(
         self,
-        io: &mut async_io::IO<'_, R,W>
+        io: &mut async_io::IO<'_, R, W>,
     ) -> Result<async_editor::Editor<B, H>, NolineError> {
         async_editor::Editor::new(io).await
     }

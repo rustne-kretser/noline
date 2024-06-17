@@ -9,6 +9,10 @@ use fixed_queue::VecDeque;
 use noline::{async_io::IO, builder::EditorBuilder};
 
 fn map_error(_e: EndpointError) -> embedded_io_async::ErrorKind {
+<<<<<<< Updated upstream
+=======
+    // TODO: This could be more specific
+>>>>>>> Stashed changes
     embedded_io_async::ErrorKind::Other
 }
 
@@ -39,7 +43,15 @@ impl<'d, R: Instance> embedded_io_async::Read for Reader<'d, R> {
         while self.queue.is_empty() {
             let mut buf: [u8; 64] = [0; 64];
             // Read a maximum of 64 bytes from the ouput
+<<<<<<< Updated upstream
             let len = self.stdin.read_packet(&mut buf).await.map_err(map_error)?;
+=======
+            let len = self
+                .stdin
+                .read_packet(&mut buf)
+                .await
+                .map_err(|e| map_error(e))?;
+>>>>>>> Stashed changes
             // This is safe because we only ever pull data when empty
             // And the queue has the same capacity as the input buffer
             for i in buf.iter().take(len) {

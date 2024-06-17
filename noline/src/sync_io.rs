@@ -2,46 +2,69 @@ use crate::error::NolineError;
 /// IO wrapper for stdin and stdout
 use embedded_io::Error;
 
-pub struct IO<R, W>
+pub struct IO<RW>
 where
-    R: embedded_io::Read,
-    W: embedded_io::Write,
+    RW: embedded_io::Read + embedded_io::Write,
 {
-    input: R,
-    output: W,
+    rw: RW,
 }
 
-impl<R, W> IO<R, W>
+impl<RW> IO<RW>
 where
-    R: embedded_io::Read,
-    W: embedded_io::Write,
+    RW: embedded_io::Read + embedded_io::Write,
 {
-    /// Create IO wrapper from input and output
-    pub fn new(input: R, output: W) -> Self {
-        Self { input, output }
+    pub fn new(rw: RW) -> Self {
+        Self { rw }
     }
 
-    /// Consume wrapper and return input and output as tuple
-    pub fn take(self) -> (R, W) {
-        (self.input, self.output)
+    pub fn inner(&mut self) -> &mut RW {
+        &mut self.rw
     }
+}
 
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, NolineError> {
-        self.input
+impl<RW> embedded_io::ErrorType for IO<RW>
+where
+    RW: embedded_io::Read + embedded_io::Write,
+{
+    type Error = NolineError;
+}
+
+impl<RW> embedded_io::Read for IO<RW>
+where
+    RW: embedded_io::Read + embedded_io::Write,
+{
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, NolineError> {
+        self.rw
             .read(buf)
             .map_err(|e| NolineError::ReadError(e.kind().into()))
     }
+}
 
-    pub fn write(&mut self, buf: &[u8]) -> Result<(), NolineError> {
-        self.output
+impl<RW> embedded_io::Write for IO<RW>
+where
+    RW: embedded_io::Read + embedded_io::Write,
+{
+    fn write(&mut self, buf: &[u8]) -> Result<usize, NolineError> {
+        self.rw
             .write_all(buf)
-            .map_err(|e| NolineError::WriteError(e.kind().into()))
+            .map_err(|e| NolineError::WriteError(e.kind().into()))?;
+        Ok(buf.len())
     }
 
-    pub fn flush(&mut self) -> Result<(), NolineError> {
-        self.output
+    fn flush(&mut self) -> Result<(), NolineError> {
+        self.rw
             .flush()
             .map_err(|e| NolineError::WriteError(e.kind().into()))
+    }
+}
+
+impl<RW> core::fmt::Write for IO<RW>
+where
+    RW: embedded_io::Read + embedded_io::Write,
+{
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.rw.write(s.as_bytes()).or(Err(core::fmt::Error))?;
+        Ok(())
     }
 }
 
@@ -50,12 +73,6 @@ pub mod std_sync {
     use super::*;
     use core::fmt;
     use std::io::{Read, Stdin, Stdout, Write};
-
-    impl Default for IO<StdinWrapper, StdoutWrapper> {
-        fn default() -> Self {
-            Self::new(StdinWrapper::new(), StdoutWrapper::new())
-        }
-    }
 
     // Wrapper for std::io::stdin
     pub struct StdinWrapper(std::io::Stdin);
@@ -110,16 +127,6 @@ pub mod std_sync {
         }
         fn flush(&mut self) -> Result<(), Self::Error> {
             self.0.flush().map_err(|e| e.kind().into())
-        }
-    }
-
-    impl<R, W> fmt::Write for IO<R, W>
-    where
-        R: embedded_io::Read,
-        W: embedded_io::Write,
-    {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            self.write(s.as_bytes()).or(Err(fmt::Error))
         }
     }
 }

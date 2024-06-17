@@ -1,0 +1,23 @@
+[package]
+name = "rp2040"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.3"
+embedded-hal = "1.0.0"
+embedded-io = "0.6.1"
+rp-pico = "0.9.0"
+usb-device = "0.3.2"
+usbd-hid = "0.7.0"
+usbd-serial = "0.2.2"
+heapless = "0.8.0"
+defmt = "0.3"
+defmt-rtt = "0.4.1"
+panic-probe = { version = "0.3.2", features = ["print-defmt"] }
+
+noline = { path = "../../../noline", version = "0.2.0", default-features = false, features = [
+    "embedded",
+    "sync",
+] }

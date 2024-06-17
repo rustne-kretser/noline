@@ -20,7 +20,7 @@ pub async fn usb_handler(usb: USB) {
     let mut config = Config::new(0xc0de, 0xcafe);
     config.manufacturer = Some("Embassy");
     config.product = Some("USB-serial example");
-    config.serial_number = Some("12345678");
+    config.serial_number = Some("TEST");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
 
