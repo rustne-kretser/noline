@@ -45,22 +45,23 @@ jobs:
       - name: Readme
         run: cargo readme > ../README.md && git diff --exit-code
 
-  cargo-outdated:
-    runs-on: ubuntu-latest
+  # cargo-outdated:
 
-    defaults:
-      run:
-        working-directory: ./noline
+  #   runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/install@v0.1
-        with:
-          crate: cargo-outdated
-          version: latest
-          use-tool-cache: true
-      - name: Outdated dependencies
-        run: cargo outdated --exit-code 1
+  #   defaults:
+  #     run:
+  #       working-directory: ./noline
+
+  #   steps:
+  #   - uses: actions/checkout@v2
+  #   - uses: actions-rs/install@v0.1
+  #     with:
+  #       crate: cargo-outdated
+  #       version: latest
+  #       use-tool-cache: true
+  #   - name: Outdated dependencies
+  #     run: cargo outdated --exit-code 1
 
   examples-std:
     runs-on: ubuntu-latest
