@@ -2,16 +2,15 @@ name: Rust
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   noline:
-
     runs-on: ubuntu-latest
 
     defaults:
@@ -19,18 +18,17 @@ jobs:
         working-directory: ./noline
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Format
-      run: cargo fmt --all -- --check
-    - name: Doc
-      run: cargo doc --verbose --all-features
-    - name: Build
-      run: cargo build --verbose --all-features
-    - name: Run tests
-      run: cargo test --verbose --all-features
+      - uses: actions/checkout@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Doc
+        run: cargo doc --verbose --all-features
+      - name: Build
+        run: cargo build --verbose --all-features
+      - name: Run tests
+        run: cargo test --verbose --all-features
 
   readme:
-
     runs-on: ubuntu-latest
 
     defaults:
@@ -38,17 +36,16 @@ jobs:
         working-directory: ./noline
 
     steps:
-    - uses: actions/checkout@v2
-    - uses: actions-rs/install@v0.1
-      with:
-        crate: cargo-readme
-        version: latest
-        use-tool-cache: true
-    - name: Readme
-      run: cargo readme > ../README.md && git diff --exit-code
+      - uses: actions/checkout@v2
+      - uses: actions-rs/install@v0.1
+        with:
+          crate: cargo-readme
+          version: latest
+          use-tool-cache: true
+      - name: Readme
+        run: cargo readme > ../README.md && git diff --exit-code
 
   cargo-outdated:
-
     runs-on: ubuntu-latest
 
     defaults:
@@ -56,17 +53,16 @@ jobs:
         working-directory: ./noline
 
     steps:
-    - uses: actions/checkout@v2
-    - uses: actions-rs/install@v0.1
-      with:
-        crate: cargo-outdated
-        version: latest
-        use-tool-cache: true
-    - name: Outdated dependencies
-      run: cargo outdated --exit-code 1
+      - uses: actions/checkout@v2
+      - uses: actions-rs/install@v0.1
+        with:
+          crate: cargo-outdated
+          version: latest
+          use-tool-cache: true
+      - name: Outdated dependencies
+        run: cargo outdated --exit-code 1
 
   examples-std:
-
     runs-on: ubuntu-latest
 
     defaults:
@@ -74,26 +70,63 @@ jobs:
         working-directory: ./examples/std
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Build
-      run: cargo build --verbose
+      - uses: actions/checkout@v2
+      - name: Build
+        run: cargo build --verbose
 
-  examples-stm32f103:
+  # examples-stm32f103:
+  #   runs-on: ubuntu-latest
 
+  #   defaults:
+  #     run:
+  #       working-directory: ./examples/no_std/stm32f103
+
+  #   steps:
+  #     - uses: actions/checkout@v2
+
+  #     - name: Install toolchain
+  #       uses: actions-rs/toolchain@v1
+  #       with:
+  #         toolchain: stable
+  #         target: thumbv7m-none-eabi
+
+  #     - name: Build
+  #       run: cargo build --verbose
+
+  examples-rp2040:
     runs-on: ubuntu-latest
 
     defaults:
       run:
-        working-directory: ./examples/no_std/stm32f103
+        working-directory: ./examples/no_std/rp2040
 
     steps:
-    - uses: actions/checkout@v2
+      - uses: actions/checkout@v2
 
-    - name: Install toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        target: thumbv7m-none-eabi
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: thumbv6m-none-eabi
 
-    - name: Build
-      run: cargo build --verbose
+      - name: Build
+        run: cargo build --verbose
+
+  examples-rp2040-embassy:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./examples/no_std/rp2040-embassy
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: thumbv6m-none-eabi
+
+      - name: Build
+        run: cargo build --verbose

@@ -22,10 +22,11 @@
 //! done without any IO, Noline can be adapted to work on any platform.
 //!
 //! Noline comes with multiple implemenations:
-//! - [`sync::Editor`] – Editor for asynchronous IO with two separate IO wrappers:
-//!   - [`sync::std::IO`] – IO wrapper for [`std::io::Read`] and [`std::io::Write`] traits
-//!   - [`sync::embedded::IO`] – IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
-//! - [`no_sync::Editor`] - Editor for [`embedded_io_async::Read`] and [`embedded_io_async::Write`]
+//! - [`sync_editor::Editor`] – Editor for synchronous IO with the following wrapper:
+//!   - [`sync_io::IO`] – IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
+//! - [`async_editor::Editor`] - Editor for asynchronous IO with the following wrapper:
+//!   - [`async_io::IO`] – IO wrapper for [`embedded_io_async::Read`] and [`embedded_io_async::Write`]
+//!
 //!
 //! Editors can be built using [`builder::EditorBuilder`].
 //!

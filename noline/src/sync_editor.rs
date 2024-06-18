@@ -1,7 +1,7 @@
 //! Line editor for synchronous IO.
 //!
-//! The editor takes a struct implementing the [`Read`] and [`Write`]
-//! traits. There are ready made implementations in [`std::IO`] and [`embedded::IO`].
+//! The editor takes a struct implementing the [`embedded_io::Read`] and [`embedded_io::Write`]
+//! traits. There is a ready made implementation in [`crate::sync_io::IO`]
 //!
 //! Use the [`crate::builder::EditorBuilder`] to build an editor.
 use embedded_io::{Read, Write};
