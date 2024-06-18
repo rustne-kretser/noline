@@ -91,6 +91,13 @@ jobs:
           toolchain: stable
           target: thumbv6m-none-eabi
 
+      - name: Install linker
+        uses: actions-rs/install@v0.1
+        with:
+          crate: flip-link
+          version: latest
+          use-tool-cache: true
+
       - name: Build
         run: cargo build --verbose
 
