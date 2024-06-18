@@ -74,25 +74,6 @@ jobs:
       - name: Build
         run: cargo build --verbose
 
-  # examples-stm32f103:
-  #   runs-on: ubuntu-latest
-
-  #   defaults:
-  #     run:
-  #       working-directory: ./examples/no_std/stm32f103
-
-  #   steps:
-  #     - uses: actions/checkout@v2
-
-  #     - name: Install toolchain
-  #       uses: actions-rs/toolchain@v1
-  #       with:
-  #         toolchain: stable
-  #         target: thumbv7m-none-eabi
-
-  #     - name: Build
-  #       run: cargo build --verbose
-
   examples-rp2040:
     runs-on: ubuntu-latest
 
