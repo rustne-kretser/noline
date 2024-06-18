@@ -46,8 +46,7 @@ heapless = "0.8.0"
 embedded-hal = { version = "1.0.0" }
 
 # fugit = "0.3.7"
-noline = { path = "../../../noline", version = "0.2.0", default-features = false, features = [
-    "embedded",
+noline = { path = "../../../noline", default-features = false, features = [
     "async",
 ] }
 nb = "1.0.0"

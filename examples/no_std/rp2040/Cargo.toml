@@ -17,7 +17,6 @@ defmt = "0.3"
 defmt-rtt = "0.4.1"
 panic-probe = { version = "0.3.2", features = ["print-defmt"] }
 
-noline = { path = "../../../noline", version = "0.2.0", default-features = false, features = [
-    "embedded",
+noline = { path = "../../../noline", default-features = false, features = [
     "sync",
 ] }

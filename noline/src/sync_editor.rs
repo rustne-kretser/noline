@@ -238,7 +238,6 @@ pub mod std_tests {
 
     #[cfg(test)]
     mod tests {
-        use core::convert::Infallible;
         use std::string::ToString;
         use std::{thread, vec::Vec};
 
@@ -360,111 +359,6 @@ pub mod std_tests {
                             let mut io = IO::new(MockIO::new(stdin, stdout));
                             let mut editor = EditorBuilder::new_unbounded()
                                 .with_unbounded_history()
-                                .build_sync(&mut io)
-                                .unwrap();
-
-                            while let Ok(s) = editor.readline(prompt, &mut io) {
-                                string_tx.send(s.to_string()).unwrap();
-                            }
-                        })
-                    },
-                )
-            }
-        }
-    }
-}
-
-#[cfg(any(test2, feature = "embedded"))]
-pub mod embedded {
-    //! IO implementation using traits from [`embedded_io`]. Requires feature `embedded`.
-
-    //    use core::fmt;
-
-    //    use embedded_io;
-    //use nb::block;
-
-    //use super::*;
-    //use crate::sync_io::IO;
-
-    /// IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
-
-    #[cfg(test)]
-    mod tests {
-        use std::string::ToString;
-        use std::{thread, vec::Vec};
-
-        use crossbeam::channel::{Receiver, Sender, TryRecvError};
-
-        use crate::builder::EditorBuilder;
-        use crate::testlib::test_editor_with_case;
-        use crate::testlib::{test_cases, MockTerminal};
-
-        use super::*;
-
-        struct MockSerial {
-            rx: Receiver<u8>,
-            buffer: Vec<u8>,
-            tx: Sender<u8>,
-        }
-
-        impl MockSerial {
-            fn new(tx: Sender<u8>, rx: Receiver<u8>) -> Self {
-                Self {
-                    rx,
-                    buffer: Vec::new(),
-                    tx,
-                }
-            }
-
-            fn from_terminal(terminal: &mut MockTerminal) -> Self {
-                let (tx, rx) = terminal.take_io();
-                Self::new(tx.unwrap(), rx)
-            }
-        }
-
-        impl serial::Read<u8> for MockSerial {
-            fn read(&mut self) -> nb::Result<u8, Self::Error> {
-                match self.rx.try_recv() {
-                    Ok(byte) => Ok(byte),
-                    Err(err) => match err {
-                        TryRecvError::Empty => Err(nb::Error::WouldBlock),
-                        TryRecvError::Disconnected => Err(nb::Error::Other(())),
-                    },
-                }
-            }
-        }
-
-        impl serial::Write<u8> for MockSerial {
-            type Error = ();
-
-            fn write(&mut self, word: u8) -> nb::Result<(), Self::Error> {
-                self.buffer.push(word);
-                Ok(())
-            }
-
-            fn flush(&mut self) -> nb::Result<(), Self::Error> {
-                for byte in self.buffer.drain(0..) {
-                    self.tx.send(byte).unwrap();
-                }
-
-                Ok(())
-            }
-        }
-
-        #[test]
-        fn test_editor() {
-            let prompt = "> ";
-
-            for case in test_cases() {
-                test_editor_with_case(
-                    case,
-                    prompt,
-                    |term| MockSerial::from_terminal(term),
-                    |serial, string_tx| {
-                        thread::spawn(move || {
-                            let mut io = IO::new(serial);
-                            let mut editor = EditorBuilder::new_static::<100>()
-                                .with_static_history::<128>()
                                 .build_sync(&mut io)
                                 .unwrap();
 
