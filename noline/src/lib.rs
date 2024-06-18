@@ -32,7 +32,7 @@
 //!
 //! # Example
 //! ```no_run
-//! //! use noline::{builder::EditorBuilder, sync_io::std_sync::StdIOWrapper, sync_io::IO};
+//! use noline::{builder::EditorBuilder, sync_io::std_sync::StdIOWrapper, sync_io::IO};
 //! use std::fmt::Write;
 //! use std::io;
 //! use termion::raw::IntoRawMode;
