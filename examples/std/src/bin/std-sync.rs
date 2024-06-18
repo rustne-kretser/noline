@@ -15,6 +15,6 @@ fn main() {
         .unwrap();
 
     while let Ok(line) = editor.readline(prompt, &mut io) {
-        write!(io, "Read: '{}'\n\r", line).unwrap();
+        writeln!(io, "Read: '{}'", line).unwrap();
     }
 }
