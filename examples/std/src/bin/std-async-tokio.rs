@@ -47,5 +47,8 @@ async fn main() {
         }
     });
 
-    let _ = term_task.await;
+    match term_task.await {
+        Ok(_) => (),
+        Err(e) => eprintln!("Error: {:?}", e),
+    }
 }

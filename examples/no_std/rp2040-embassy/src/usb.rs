@@ -2,7 +2,7 @@ use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::{Driver, InterruptHandler};
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::class::cdc_acm::{CdcAcmClass, State, USB_CLASS_CDC};
 use embassy_usb::{Builder, Config};
 
 use crate::noline_async::cli;
@@ -10,6 +10,13 @@ use crate::noline_async::cli;
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
 });
+
+const USB_CDC_SUBCLASS_ACM: u8 = 0x02;
+const USB_CDC_PROTOCOL_AT: u8 = 0x01;
+
+const BUF_SIZE_DESCRIPTOR: usize = 256;
+const BUF_SIZE_CONTROL: usize = 64;
+const MAX_PACKET_SIZE: u16 = 64;
 
 #[embassy_executor::task]
 pub async fn usb_handler(usb: USB) {
@@ -26,18 +33,16 @@ pub async fn usb_handler(usb: USB) {
 
     // Required for windows compatibility.
     // https://developer.nordicsemi.com/nRF_Connect_SDK/doc/1.9.1/kconfig/CONFIG_CDC_ACM_IAD.html#help
-    config.device_class = 0xEF;
-    config.device_sub_class = 0x02;
-    config.device_protocol = 0x01;
-    config.composite_with_iads = true;
+    config.device_class = USB_CLASS_CDC;
+    config.device_sub_class = USB_CDC_SUBCLASS_ACM;
+    config.device_protocol = USB_CDC_PROTOCOL_AT;
 
     // Create embassy-usb DeviceBuilder using the driver and config.
     // It needs some buffers for building the descriptors.
-    //let mut device_descriptor = [0; 256];
-    let mut config_descriptor = [0; 256];
-    let mut bos_descriptor = [0; 256];
-    let mut msos_descriptor = [0; 256];
-    let mut control_buf = [0; 64];
+    let mut config_descriptor = [0; BUF_SIZE_DESCRIPTOR];
+    let mut bos_descriptor = [0; BUF_SIZE_DESCRIPTOR];
+    let mut msos_descriptor = [0; BUF_SIZE_DESCRIPTOR];
+    let mut control_buf = [0; BUF_SIZE_CONTROL];
 
     let mut state = State::new();
 
@@ -52,12 +57,12 @@ pub async fn usb_handler(usb: USB) {
     );
 
     // Create classes on the builder.
-    let serial = CdcAcmClass::new(&mut builder, &mut state, 64);
+    let serial = CdcAcmClass::new(&mut builder, &mut state, MAX_PACKET_SIZE);
 
     let (mut send, mut recv, mut control) = serial.split_with_control();
 
     let noline_fut = async {
-        let _ = cli(&mut send, &mut recv, &mut control).await;
+        cli(&mut send, &mut recv, &mut control).await;
     };
 
     // Build the builder.

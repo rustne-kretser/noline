@@ -56,8 +56,8 @@ where
                         return Err(NolineError::ParserError);
                     }
                 }
-            }
-            if len == 0 {
+            } else {
+                // len == 0, which should not happen
                 return Err(NolineError::Aborted);
             }
         };

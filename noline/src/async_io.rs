@@ -21,10 +21,10 @@ where
         Self { input, output }
     }
 
-    // /// Consume wrapper and return input and output as tuple
-    // pub fn take(self) -> (R, W) {
-    //     (self.input, self.output)
-    // }
+    /// Consume wrapper and return input and output as tuple
+    pub fn take(self) -> (&'a mut R, &'a mut W) {
+        (self.input, self.output)
+    }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, NolineError> {
         self.input

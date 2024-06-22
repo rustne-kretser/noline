@@ -48,7 +48,7 @@ impl<'d, R: Instance> embedded_io_async::Read for Reader<'d, R> {
             // This is safe because we only ever pull data when empty
             // And the queue has the same capacity as the input buffer
             for i in buf.iter().take(len) {
-                let _ = self.queue.push_back(*i);
+                self.queue.push_back(*i).expect("Buffer overflow");
             }
         }
 
@@ -136,7 +136,7 @@ pub async fn cli<'d, T: Instance + 'd>(
             .unwrap();
 
         while let Ok(line) = editor.readline(prompt, &mut io.0).await {
-            let _ = writeln!(io, "READ: {}", line);
+            writeln!(io, "READ: {}", line).expect("Write failed");
         }
     }
 }
