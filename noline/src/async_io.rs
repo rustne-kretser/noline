@@ -7,8 +7,8 @@ where
     R: embedded_io_async::Read,
     W: embedded_io_async::Write,
 {
-    input: &'a mut R,
-    output: &'a mut W,
+    pub input: &'a mut R,
+    pub output: &'a mut W,
 }
 
 impl<'a, R, W> IO<'a, R, W>
