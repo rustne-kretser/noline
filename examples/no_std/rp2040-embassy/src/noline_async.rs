@@ -1,5 +1,3 @@
-use core::fmt::Write as FmtWrite;
-use embassy_futures::block_on;
 use embassy_rp::usb::{Driver, Instance};
 use embassy_usb::{
     class::cdc_acm::{ControlChanged, Receiver, Sender},
@@ -40,11 +38,7 @@ impl<'d, R: Instance> embedded_io_async::Read for Reader<'d, R> {
         while self.queue.is_empty() {
             let mut buf: [u8; 64] = [0; 64];
             // Read a maximum of 64 bytes from the ouput
-            let len = self
-                .stdin
-                .read_packet(&mut buf)
-                .await
-                .map_err(|e| map_error(e))?;
+            let len = self.stdin.read_packet(&mut buf).await.map_err(map_error)?;
             // This is safe because we only ever pull data when empty
             // And the queue has the same capacity as the input buffer
             for i in buf.iter().take(len) {
@@ -84,28 +78,7 @@ impl<'d, R: Instance> embedded_io_async::Write for Writer<'d, R> {
     }
 }
 
-// We need to use the New Type idiom to enable us to implement FmtWrite for IO
-struct MyIO<'a, R: embedded_io_async::Read, W: embedded_io_async::Write>(IO<'a, R, W>);
-impl<'a, R: embedded_io_async::Read, W: embedded_io_async::Write> MyIO<'a, R, W> {
-    fn new(read: &'a mut R, write: &'a mut W) -> Self {
-        Self(IO::new(read, write))
-    }
-}
-
-// Formatted output for the Writer which allows us to use the writeln! macro directly
-impl<'a, R, W> FmtWrite for MyIO<'a, R, W>
-where
-    R: embedded_io_async::Read,
-    W: embedded_io_async::Write,
-{
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let data = s.as_bytes();
-
-        block_on(self.0.write(data)).map_err(|_| core::fmt::Error {})?;
-
-        Ok(())
-    }
-}
+const MAX_LINE_SIZE: usize = 64;
 
 pub async fn cli<'d, T: Instance + 'd>(
     send: &'d mut Sender<'d, Driver<'d, T>>,
@@ -127,16 +100,25 @@ pub async fn cli<'d, T: Instance + 'd>(
             control.control_changed().await;
         }
 
-        let mut io = MyIO::new(&mut stdin, &mut stdout);
+        let mut io = IO::new(&mut stdin, &mut stdout);
 
-        let mut editor = EditorBuilder::new_static::<64>()
-            .with_static_history::<64>()
-            .build_async(&mut io.0)
+        let mut editor = EditorBuilder::new_static::<MAX_LINE_SIZE>()
+            .with_static_history::<MAX_LINE_SIZE>()
+            .build_async(&mut io)
             .await
             .unwrap();
 
-        while let Ok(line) = editor.readline(prompt, &mut io.0).await {
-            writeln!(io, "READ: {}", line).expect("Write failed");
+        while let Ok(line) = editor.readline(prompt, &mut io).await {
+            // Create a buffer that can take the MAX_LINE_SIZE along with the 'Read: ''\r/n' text
+            let mut buf = [0u8; MAX_LINE_SIZE + 12];
+            let s = format_no_std::show(&mut buf, format_args!("Read: '{}'\r\n", line))
+                .expect("Format error");
+
+            // split s into slices of MAX_LINE_SIZE bytes as the USB output buffer has a
+            // maximum size that we will overflow if we try and write more than this at one time
+            for chunk in s.as_bytes().chunks(MAX_LINE_SIZE) {
+                io.write(chunk).await.expect("Write error");
+            }
         }
     }
 }
