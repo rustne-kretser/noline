@@ -1,8 +1,16 @@
 # Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Yet to be released
+
+- Use embedded_io and embedded_io_async Read/Write traits
+  - This ensures the std and no-std implementations are equivilent at the IO API interface
+- Add sync and async examples for rp2040 async makes use of [embassy](https://embassy.dev/)
+- Removed stm32 example as there was no hardware available (can be replaced later)
 
 ## [0.2.1] - 2024-06-06
 
@@ -18,4 +26,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2022-03-14
 
 - Initial release
-

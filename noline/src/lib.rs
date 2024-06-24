@@ -22,38 +22,34 @@
 //! done without any IO, Noline can be adapted to work on any platform.
 //!
 //! Noline comes with multiple implemenations:
-//! - [`sync::Editor`] – Editor for asynchronous IO with two separate IO wrappers:
-//!   - [`sync::std::IO`] – IO wrapper for [`std::io::Read`] and [`std::io::Write`] traits
-//!   - [`sync::embedded::IO`] – IO wrapper for [`embedded_hal::serial::Read`] and [`embedded_hal::serial::Write`]
-//! - [`no_sync::tokio::Editor`] - Editor for [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`]
+//! - [`sync_editor::Editor`] – Editor for synchronous IO with the following wrapper:
+//!   - [`sync_io::IO`] – IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
+//! - [`async_editor::Editor`] - Editor for asynchronous IO with the following wrapper:
+//!   - [`async_io::IO`] – IO wrapper for [`embedded_io_async::Read`] and [`embedded_io_async::Write`]
+//!
 //!
 //! Editors can be built using [`builder::EditorBuilder`].
 //!
 //! # Example
 //! ```no_run
-//! use noline::{sync::std::IO, builder::EditorBuilder};
+//! use noline::{builder::EditorBuilder, sync_io::std_sync::StdIOWrapper, sync_io::IO};
 //! use std::fmt::Write;
 //! use std::io;
 //! use termion::raw::IntoRawMode;
 //!
 //! fn main() {
-//!     let stdin = io::stdin();
-//!     let stdout = io::stdout().into_raw_mode().unwrap();
+//!     let _stdout = io::stdout().into_raw_mode().unwrap();
 //!     let prompt = "> ";
 //!
-//!     let mut io = IO::new(stdin, stdout);
+//!     let mut io = IO::<StdIOWrapper>::new(StdIOWrapper::new());
 //!
 //!     let mut editor = EditorBuilder::new_unbounded()
 //!         .with_unbounded_history()
 //!         .build_sync(&mut io)
 //!         .unwrap();
 //!
-//!     loop {
-//!         if let Ok(line) = editor.readline(prompt, &mut io) {
-//!             write!(io, "Read: '{}'\n\r", line).unwrap();
-//!         } else {
-//!             break;
-//!         }
+//!     while let Ok(line) = editor.readline(prompt, &mut io) {
+//!         writeln!(io, "Read: '{}'", line).unwrap();
 //!     }
 //! }
 //! ```
@@ -63,15 +59,21 @@
 #[cfg(any(test, doc, feature = "std"))]
 #[macro_use]
 extern crate std;
+#[cfg(any(test, doc, feature = "async"))]
+pub mod async_editor;
+#[cfg(any(test, doc, feature = "async"))]
+pub mod async_io;
 pub mod builder;
 mod core;
 pub mod error;
 pub mod history;
 mod input;
 pub mod line_buffer;
-pub mod no_sync;
 mod output;
-pub mod sync;
+#[cfg(any(test, doc, feature = "sync"))]
+pub mod sync_editor;
+#[cfg(any(test, doc, feature = "sync"))]
+pub mod sync_io;
 pub(crate) mod terminal;
 mod utf8;
 
