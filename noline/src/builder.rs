@@ -3,40 +3,39 @@
 use core::marker::PhantomData;
 
 use crate::{
-    error::Error,
+    error::NolineError,
     history::{History, NoHistory, StaticHistory},
     line_buffer::{Buffer, NoBuffer, StaticBuffer},
-    sync::{self, Read, Write},
 };
 
-#[cfg(any(test, feature = "alloc", feature = "std"))]
-use crate::line_buffer::UnboundedBuffer;
+#[cfg(any(test, doc, feature = "alloc", feature = "std"))]
+use crate::{history::UnboundedHistory, line_buffer::UnboundedBuffer};
 
-#[cfg(any(test, feature = "alloc", feature = "std"))]
-use crate::history::UnboundedHistory;
+#[cfg(any(test, doc, feature = "sync"))]
+use crate::{sync_editor, sync_io};
 
-#[cfg(any(test, doc, feature = "tokio"))]
-use ::tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(any(test, doc, feature = "async"))]
+use crate::{async_editor, async_io};
 
-#[cfg(any(test, doc, feature = "tokio"))]
-use crate::no_sync;
-
-/// Builder for [`sync::Editor`] and [`no_sync::tokio::Editor`].
+/// Builder for [`sync_editor::Editor`] and [`async_editor::Editor`].
 ///
 /// # Example
 /// ```no_run
-/// # use noline::sync::{Read, Write};
-/// # struct IO {}
-/// # impl Write for IO {
-/// #     type Error = ();
-/// #     fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> { unimplemented!() }
+/// # use embedded_io::{Read, Write, ErrorType};
+/// # use noline::sync_io::IO;
+/// # use core::convert::Infallible;
+/// # struct MyIO {}
+/// # impl ErrorType for MyIO {
+/// #     type Error = Infallible;
+/// # }
+/// # impl Write for MyIO {
+/// #     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> { unimplemented!() }
 /// #     fn flush(&mut self) -> Result<(), Self::Error> { unimplemented!() }
 /// # }
-/// # impl Read for IO {
-/// #     type Error = ();
-/// #     fn read(&mut self) -> Result<u8, Self::Error> { unimplemented!() }
+/// # impl Read for MyIO {
+/// #     fn read(&mut self, buf: &mut[u8]) -> Result<usize, Self::Error> { unimplemented!() }
 /// # }
-/// # let mut io = IO {};
+/// # let mut io = IO::new(MyIO {});
 /// use noline::builder::EditorBuilder;
 ///
 /// let mut editor = EditorBuilder::new_static::<100>()
@@ -95,24 +94,21 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
         }
     }
 
-    /// Build [`sync::Editor`]. Is equivalent of calling [`sync::Editor::new()`].
-    pub fn build_sync<IO, RE, WE>(
+    #[cfg(any(test, doc, feature = "sync"))]
+    /// Build [`sync_editor::Editor`]. Is equivalent of calling [`sync_editor::Editor::new()`].
+    pub fn build_sync<RW: embedded_io::Read + embedded_io::Write>(
         self,
-        io: &mut IO,
-    ) -> Result<sync::Editor<B, H, IO>, Error<RE, WE>>
-    where
-        IO: Read<Error = RE> + Write<Error = WE>,
-    {
-        sync::Editor::new(io)
+        io: &mut sync_io::IO<RW>,
+    ) -> Result<sync_editor::Editor<B, H>, NolineError> {
+        sync_editor::Editor::new(io)
     }
 
-    #[cfg(any(test, doc, feature = "tokio"))]
-    /// Build [`no_sync::tokio::Editor`]. Is equivalent of calling [`no_sync::tokio::Editor::new()`].
-    pub async fn build_async_tokio<W: AsyncWriteExt + Unpin, R: AsyncReadExt + Unpin>(
+    #[cfg(any(test, doc, feature = "async"))]
+    /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
+    pub async fn build_async<R: embedded_io_async::Read, W: embedded_io_async::Write>(
         self,
-        stdin: &mut R,
-        stdout: &mut W,
-    ) -> Result<no_sync::tokio::Editor<B, H>, Error<std::io::Error, std::io::Error>> {
-        no_sync::tokio::Editor::new(stdin, stdout).await
+        io: &mut async_io::IO<'_, R, W>,
+    ) -> Result<async_editor::Editor<B, H>, NolineError> {
+        async_editor::Editor::new(io).await
     }
 }

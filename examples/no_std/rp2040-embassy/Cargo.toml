@@ -1,0 +1,59 @@
+[package]
+authors = ["Matt Spencer <matthew@thespencers.me.uk>"]
+edition = "2018"
+name = "rp2040-embassy"
+version = "0.1.0"
+
+[features]
+default = ["defmt"]
+defmt = []
+
+[dependencies]
+
+embassy-rp = { version = "0.1.0", features = [
+    "defmt",
+    "unstable-pac",
+    "time-driver",
+    "critical-section-impl",
+] }
+embassy-embedded-hal = { version = "0.1.0", features = ["defmt"] }
+embassy-executor = { version = "0.5.0", features = [
+    "arch-cortex-m",
+    "executor-thread",
+    "integrated-timers",
+    "arch-cortex-m",
+    "executor-thread",
+] }
+embassy-sync = { version = "0.6.0", features = ["defmt"] }
+embassy-time = { version = "0.3.0", features = [
+    "defmt",
+    "defmt-timestamp-uptime",
+] }
+embassy-futures = { version = "0.1.0" }
+embassy-usb = { version = "0.2.0", features = ["defmt"] }
+
+
+defmt = "0.3"
+defmt-rtt = "0.4"
+fixed = "1.23.1"
+fixed-macro = "1.2"
+format_no_std = "1.2.0"
+
+#cortex-m = { version = "0.7.6", features = ["critical-section-single-core"] }
+cortex-m = { version = "0.7.6", features = ["inline-asm"] }
+cortex-m-rt = "0.7.0"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+heapless = "0.8.0"
+embedded-hal = { version = "1.0.0" }
+
+# fugit = "0.3.7"
+noline = { path = "../../../noline", default-features = false, features = [
+    "async",
+] }
+nb = "1.0.0"
+fixed-queue = "0.5.1"
+embedded-io-async = "0.6.1"
+
+
+[profile.release]
+debug = 2
