@@ -59,9 +59,7 @@
 #[cfg(any(test, doc, feature = "std"))]
 #[macro_use]
 extern crate std;
-#[cfg(any(test, doc, feature = "async"))]
 pub mod async_editor;
-#[cfg(any(test, doc, feature = "async"))]
 pub mod async_io;
 pub mod builder;
 mod core;
@@ -70,9 +68,7 @@ pub mod history;
 mod input;
 pub mod line_buffer;
 mod output;
-#[cfg(any(test, doc, feature = "sync"))]
 pub mod sync_editor;
-#[cfg(any(test, doc, feature = "sync"))]
 pub mod sync_io;
 pub(crate) mod terminal;
 mod utf8;
