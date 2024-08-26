@@ -1,18 +1,54 @@
 use embedded_io_async::Write;
-use noline::async_io::{
-    async_std::{StdinWrapper, StdoutWrapper},
-    IO,
-};
 use noline::builder::EditorBuilder;
 use termion::raw::IntoRawMode;
+
+use tokio::io;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+pub struct IOWrapper {
+    stdin: io::Stdin,
+    stdout: io::Stdout,
+}
+impl IOWrapper {
+    pub fn new() -> Self {
+        Self {
+            stdin: io::stdin(),
+            stdout: io::stdout(),
+        }
+    }
+}
+
+impl embedded_io_async::ErrorType for IOWrapper {
+    type Error = embedded_io_async::ErrorKind;
+}
+
+impl embedded_io_async::Read for IOWrapper {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        let mut b = [0];
+        let _ = self
+            .stdin
+            .read_exact(&mut b)
+            .await
+            .map_err(|e| Self::Error::from(e.kind()))?;
+        buf[0] = b[0];
+        Ok(1)
+    }
+}
+
+impl embedded_io_async::Write for IOWrapper {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.stdout.write(buf).await.map_err(|e| e.kind().into())
+    }
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.stdout.flush().await.map_err(|e| e.kind().into())
+    }
+}
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let term_task = tokio::spawn(async {
         let _raw_term = std::io::stdout().into_raw_mode().unwrap();
-        let mut stdin = StdinWrapper::default();
-        let mut stdout = StdoutWrapper::default();
-        let mut io = IO::new(&mut stdin, &mut stdout);
+        let mut io = IOWrapper::new();
 
         let prompt = "> ";
 
@@ -24,7 +60,7 @@ async fn main() {
 
         while let Ok(line) = editor.readline(prompt, &mut io).await {
             let s = format!("Read: '{}'\n\r", line);
-            io.output.write_all(s.as_bytes()).await.unwrap();
+            io.stdout.write_all(s.as_bytes()).await.unwrap();
         }
     });
 

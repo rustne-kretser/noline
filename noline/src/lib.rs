@@ -17,40 +17,45 @@
 //! The API should be considered experimental and will change in the
 //! future.
 //!
-//! The core implementation consists of a state machie taking bytes as
+//! The core implementation consists of a state machine taking bytes as
 //! input and yielding iterators over byte slices. Because this is
 //! done without any IO, Noline can be adapted to work on any platform.
 //!
 //! Noline comes with multiple implemenations:
-//! - [`sync_editor::Editor`] – Editor for synchronous IO with the following wrapper:
-//!   - [`sync_io::IO`] – IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
-//! - [`async_editor::Editor`] - Editor for asynchronous IO with the following wrapper:
-//!   - [`async_io::IO`] – IO wrapper for [`embedded_io_async::Read`] and [`embedded_io_async::Write`]
-//!
+//! - [`sync_editor::Editor`] – Editor for synchronous IO
+//! - [`async_editor::Editor`] - Editor for asynchronous IO
 //!
 //! Editors can be built using [`builder::EditorBuilder`].
 //!
 //! # Example
 //! ```no_run
-//! use noline::{builder::EditorBuilder, sync_io::std_sync::StdIOWrapper, sync_io::IO};
-//! use std::fmt::Write;
-//! use std::io;
-//! use termion::raw::IntoRawMode;
+//! # use noline::{builder::EditorBuilder};
+//! # use embedded_io::{Read, Write, ErrorType};
+//! # use core::convert::Infallible;
+//! # struct MyIO {}
+//! # impl ErrorType for MyIO {
+//! #     type Error = Infallible;
+//! # }
+//! # impl embedded_io::Write for MyIO {
+//! #     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> { unimplemented!() }
+//! #     fn flush(&mut self) -> Result<(), Self::Error> { unimplemented!() }
+//! # }
+//! # impl embedded_io::Read for MyIO {
+//! #     fn read(&mut self, buf: &mut[u8]) -> Result<usize, Self::Error> { unimplemented!() }
+//! # }
+//! # let mut io = MyIO {};
+//! let prompt = "> ";
 //!
-//! fn main() {
-//!     let _stdout = io::stdout().into_raw_mode().unwrap();
-//!     let prompt = "> ";
+//! let mut io = MyIO {}; // IO handler, see full examples for details
+//!                       // how to implement it
 //!
-//!     let mut io = IO::<StdIOWrapper>::new(StdIOWrapper::new());
+//! let mut editor = EditorBuilder::new_unbounded()
+//!     .with_unbounded_history()
+//!     .build_sync(&mut io)
+//!     .unwrap();
 //!
-//!     let mut editor = EditorBuilder::new_unbounded()
-//!         .with_unbounded_history()
-//!         .build_sync(&mut io)
-//!         .unwrap();
-//!
-//!     while let Ok(line) = editor.readline(prompt, &mut io) {
-//!         writeln!(io, "Read: '{}'", line).unwrap();
-//!     }
+//! while let Ok(line) = editor.readline(prompt, &mut io) {
+//!     writeln!(io, "Read: '{}'", line).unwrap();
 //! }
 //! ```
 
@@ -60,7 +65,6 @@
 #[macro_use]
 extern crate std;
 pub mod async_editor;
-pub mod async_io;
 pub mod builder;
 mod core;
 pub mod error;
@@ -69,7 +73,6 @@ mod input;
 pub mod line_buffer;
 mod output;
 pub mod sync_editor;
-pub mod sync_io;
 pub(crate) mod terminal;
 mod utf8;
 

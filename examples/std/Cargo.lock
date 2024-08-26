@@ -547,6 +547,7 @@ dependencies = [
 name = "noline-example"
 version = "0.1.0"
 dependencies = [
+ "embedded-io",
  "embedded-io-async",
  "heapless",
  "noline",
