@@ -1,0 +1,8 @@
+[workspace]
+
+members = [
+    "noline",
+    "examples/std",
+    "examples/no_std/rp2040",
+    "examples/no_std/rp2040-embassy",
+]
