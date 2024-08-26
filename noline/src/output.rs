@@ -65,7 +65,7 @@ impl<const N: usize> UintToBytes<N> {
 
             for i in (0..N).rev() {
                 bytes[i] = 0x30 + (n % 10) as u8;
-                n = n / 10;
+                n /= 10;
 
                 if n == 0 {
                     break;
@@ -129,7 +129,7 @@ impl Iterator for MoveCursor {
                     self.state = MoveCursorState::ScrollFinalByte;
 
                     break Some(OutputItem::UintToBytes(
-                        UintToBytes::from_uint(self.scroll.abs() as usize).unwrap(),
+                        UintToBytes::from_uint(self.scroll.unsigned_abs()).unwrap(),
                     ));
                 }
                 MoveCursorState::ScrollFinalByte => {
@@ -569,7 +569,7 @@ mod tests {
         fn to_string<const N: usize>(n: usize) -> String {
             let uint: UintToBytes<N> = UintToBytes::from_uint(n).unwrap();
 
-            String::from_utf8(uint.as_bytes().iter().map(|&b| b).collect::<Vec<u8>>()).unwrap()
+            String::from_utf8(uint.as_bytes().to_vec()).unwrap()
         }
 
         assert_eq!(to_string::<4>(0), "0");
@@ -585,14 +585,13 @@ mod tests {
     fn move_cursor() {
         fn to_string(cm: MoveCursor) -> String {
             String::from_utf8(
-                cm.map(|item| {
+                cm.flat_map(|item| {
                     if let Some(bytes) = item.get_bytes() {
-                        bytes.iter().map(|&b| b).collect::<Vec<u8>>()
+                        bytes.to_vec()
                     } else {
                         vec![]
                     }
                 })
-                .flatten()
                 .collect(),
             )
             .unwrap()
@@ -684,17 +683,16 @@ mod tests {
 
     #[test]
     fn byte_iterator() {
-        fn to_string<'a, B: Buffer>(output: Output<'a, B>) -> String {
+        fn to_string<B: Buffer>(output: Output<'_, B>) -> String {
             String::from_utf8(
                 output
-                    .map(|item| {
+                    .flat_map(|item| {
                         if let Some(bytes) = item.get_bytes() {
-                            bytes.iter().map(|&b| b).collect::<Vec<u8>>()
+                            bytes.to_vec()
                         } else {
                             vec![]
                         }
                     })
-                    .flatten()
                     .collect(),
             )
             .unwrap()

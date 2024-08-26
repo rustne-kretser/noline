@@ -157,16 +157,14 @@ impl<'a> IntoIterator for CircularSlice<'a> {
         let (range1, range2) = self.get_ranges();
         let (slice1, slice2) = self.get_slices();
 
-        range1
-            .zip(slice1.into_iter())
-            .chain(range2.zip(slice2.into_iter()))
+        range1.zip(slice1.iter()).chain(range2.zip(slice2.iter()))
     }
 }
 
 /// Trait for line history
 pub trait History: Default {
     /// Return entry at index, or None if out of bounds
-    fn get_entry<'a>(&'a self, index: usize) -> Option<CircularSlice<'a>>;
+    fn get_entry(&self, index: usize) -> Option<CircularSlice<'_>>;
 
     /// Add new entry at the end
     fn add_entry<'a>(&mut self, entry: &'a str) -> Result<(), &'a str>;
@@ -188,9 +186,9 @@ pub trait History: Default {
 ///
 /// This should ideally be in the [`History`] trait, but is
 /// until `type_alias_impl_trait` is stable.
-pub(crate) fn get_history_entries<'a, H: History>(
-    history: &'a H,
-) -> impl Iterator<Item = CircularSlice<'a>> {
+pub(crate) fn get_history_entries<H: History>(
+    history: &H,
+) -> impl Iterator<Item = CircularSlice<'_>> {
     (0..(history.number_of_entries())).filter_map(|index| history.get_entry(index))
 }
 
@@ -213,7 +211,7 @@ impl<const N: usize> StaticHistory<N> {
         CircularRange::new(self.window.end(), self.window.end(), N, N)
     }
 
-    fn get_buffer<'a>(&'a self) -> CircularSlice<'a> {
+    fn get_buffer(&self) -> CircularSlice<'_> {
         CircularSlice::new(
             &self.buffer,
             self.window.start(),
@@ -222,7 +220,7 @@ impl<const N: usize> StaticHistory<N> {
         )
     }
 
-    fn get_entry_ranges<'a>(&'a self) -> impl Iterator<Item = CircularRange> + 'a {
+    fn get_entry_ranges(&self) -> impl Iterator<Item = CircularRange> + '_ {
         let delimeters =
             self.get_buffer()
                 .into_iter()
@@ -231,7 +229,7 @@ impl<const N: usize> StaticHistory<N> {
         [self.window.start()]
             .into_iter()
             .chain(delimeters.clone().map(|i| i + 1))
-            .zip(delimeters.chain([self.window.end()].into_iter()))
+            .zip(delimeters.chain([self.window.end()]))
             .filter_map(|(start, end)| {
                 if start != end {
                     Some(CircularRange::new(start, end, self.window.len(), N))
@@ -241,7 +239,7 @@ impl<const N: usize> StaticHistory<N> {
             })
     }
 
-    fn get_entries<'a>(&'a self) -> impl Iterator<Item = CircularSlice<'a>> {
+    fn get_entries(&self) -> impl Iterator<Item = CircularSlice<'_>> {
         self.get_entry_ranges()
             .map(|range| CircularSlice::from_range(&self.buffer, range))
     }
@@ -287,7 +285,7 @@ impl<const N: usize> History for StaticHistory<N> {
         self.get_entries().count()
     }
 
-    fn get_entry<'a>(&'a self, index: usize) -> Option<CircularSlice<'a>> {
+    fn get_entry(&self, index: usize) -> Option<CircularSlice<'_>> {
         self.get_entries().nth(index)
     }
 }
@@ -308,7 +306,7 @@ impl Default for NoHistory {
 }
 
 impl History for NoHistory {
-    fn get_entry<'a>(&'a self, _index: usize) -> Option<CircularSlice<'a>> {
+    fn get_entry(&self, _index: usize) -> Option<CircularSlice<'_>> {
         None
     }
 
@@ -345,7 +343,7 @@ impl<'a, H: History> HistoryNavigator<'a, H> {
             .get_or_insert_with(|| self.history.number_of_entries())
     }
 
-    pub(crate) fn move_up<'b>(&'b mut self) -> Result<CircularSlice<'b>, ()> {
+    pub(crate) fn move_up(&mut self) -> Result<CircularSlice<'_>, ()> {
         let position = self.get_position();
 
         if position > 0 {
@@ -357,7 +355,7 @@ impl<'a, H: History> HistoryNavigator<'a, H> {
         }
     }
 
-    pub(crate) fn move_down<'b>(&'b mut self) -> Result<CircularSlice<'b>, ()> {
+    pub(crate) fn move_down(&mut self) -> Result<CircularSlice<'_>, ()> {
         let new_position = self.get_position() + 1;
 
         if new_position < self.history.number_of_entries() {
@@ -406,7 +404,7 @@ mod alloc {
     }
 
     impl History for UnboundedHistory {
-        fn get_entry<'a>(&'a self, index: usize) -> Option<CircularSlice<'a>> {
+        fn get_entry(&self, index: usize) -> Option<CircularSlice<'_>> {
             let s = self.buffer[index].as_str();
 
             Some(CircularSlice::new(s.as_bytes(), 0, s.len(), s.len()))

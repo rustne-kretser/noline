@@ -2,6 +2,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::utf8::{Utf8Char, Utf8Decoder, Utf8DecoderStatus};
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Eq, PartialEq, Copy, Clone, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum ControlCharacter {
@@ -49,6 +50,7 @@ impl ControlCharacter {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum CSI {
     CUU(usize),
@@ -84,7 +86,6 @@ impl CSI {
             'n' => Self::DSR,
             '~' => {
                 if let Some(arg) = arg1 {
-                    let arg = arg;
                     match arg {
                         1 => Self::Home,
                         3 => Self::Delete,
@@ -244,14 +245,14 @@ impl Parser {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::testlib::AsByteVec;
+    use crate::testlib::ToByteVec;
 
     use super::*;
     use std::vec::Vec;
     use ControlCharacter::*;
 
-    fn input_sequence(parser: &mut Parser, seq: impl AsByteVec) -> Vec<Action> {
-        seq.as_byte_vec()
+    fn input_sequence(parser: &mut Parser, seq: impl ToByteVec) -> Vec<Action> {
+        seq.to_byte_vec()
             .into_iter()
             .map(|b| parser.advance(b))
             .collect()
@@ -263,10 +264,7 @@ pub(crate) mod tests {
 
         assert_eq!(parser.state, State::Ground);
 
-        assert_eq!(
-            parser.advance('a' as u8),
-            Action::Print(Utf8Char::from_str("a"))
-        );
+        assert_eq!(parser.advance(b'a'), Action::Print(Utf8Char::from_str("a")));
         assert_eq!(parser.advance(0x7), Action::ControlCharacter(CtrlG));
         assert_eq!(parser.advance(0x3), Action::ControlCharacter(CtrlC));
 

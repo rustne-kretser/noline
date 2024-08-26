@@ -32,11 +32,7 @@ impl Utf8Byte for u8 {
     }
 
     fn utf8_is_continuation(&self) -> bool {
-        if let Utf8ByteType::Continuation = self.utf8_byte_type() {
-            true
-        } else {
-            false
-        }
+        matches!(self.utf8_byte_type(), Utf8ByteType::Continuation)
     }
 }
 
@@ -58,7 +54,7 @@ pub struct Utf8Char {
 #[cfg(test)]
 impl std::fmt::Debug for Utf8Char {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("Utf8Char").field(&self.to_char()).finish()
+        f.debug_tuple("Utf8Char").field(&self.as_char()).finish()
     }
 }
 
@@ -88,7 +84,7 @@ impl Utf8Char {
     }
 
     #[cfg(test)]
-    pub(crate) fn to_char(&self) -> char {
+    pub(crate) fn as_char(&self) -> char {
         char::from_u32(
             self.as_bytes()
                 .iter()
@@ -141,7 +137,7 @@ impl Utf8Decoder {
         self.buf[self.pos] = byte;
         self.pos += 1;
 
-        return Ok(());
+        Ok(())
     }
 
     pub fn advance(&mut self, byte: u8) -> Utf8DecoderStatus {
@@ -210,11 +206,11 @@ mod tests {
         let mut parser = Utf8Decoder::new();
 
         assert_eq!(
-            parser.advance('a' as u8),
+            parser.advance(b'a'),
             Utf8DecoderStatus::Done(Utf8Char::from_str("a"))
         );
 
-        assert_eq!(parser.advance('a' as u8), Utf8DecoderStatus::Error);
+        assert_eq!(parser.advance(b'a'), Utf8DecoderStatus::Error);
     }
 
     #[test]
@@ -230,7 +226,7 @@ mod tests {
             Utf8DecoderStatus::Done(Utf8Char::from_str("æ"))
         );
 
-        assert_eq!(parser.advance('a' as u8), Utf8DecoderStatus::Error);
+        assert_eq!(parser.advance(b'a'), Utf8DecoderStatus::Error);
     }
 
     #[test]
@@ -247,7 +243,7 @@ mod tests {
             Utf8DecoderStatus::Done(Utf8Char::from_str("€"))
         );
 
-        assert_eq!(parser.advance('a' as u8), Utf8DecoderStatus::Error);
+        assert_eq!(parser.advance(b'a'), Utf8DecoderStatus::Error);
     }
 
     #[test]
@@ -268,7 +264,7 @@ mod tests {
             Utf8DecoderStatus::Done(Utf8Char::from_str(symbol))
         );
 
-        assert_eq!(parser.advance('a' as u8), Utf8DecoderStatus::Error);
+        assert_eq!(parser.advance(b'a'), Utf8DecoderStatus::Error);
     }
 
     #[test]
@@ -288,6 +284,6 @@ mod tests {
 
     #[test]
     fn to_char() {
-        assert_eq!(Utf8Char::from_str("€").to_char(), '€');
+        assert_eq!(Utf8Char::from_str("€").as_char(), '€');
     }
 }

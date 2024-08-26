@@ -48,7 +48,7 @@ impl Initializer {
         // so to probe the size we move the cursor way out of the screen
         // and then request the position, because the cursor must be in
         // the screen this gives us the size.
-        "\r\x1b[J\x1b7\x1b[6n\x1b[999;999H\x1b[6n\x1b8".as_bytes()
+        b"\r\x1b[J\x1b7\x1b[6n\x1b[999;999H\x1b[6n\x1b8"
     }
 
     // Advance initializer by one byte
@@ -113,13 +113,13 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
     }
 
     // Truncate buffer, clear line and print prompt
-    pub fn reset<'b>(&'b mut self) -> Output<'b, B> {
+    pub fn reset(&mut self) -> Output<'_, B> {
         self.buffer.truncate();
         self.generate_output(ClearAndPrintPrompt)
     }
 
-    fn generate_output<'b>(&'b mut self, action: OutputAction) -> Output<'b, B> {
-        Output::new(self.prompt, &mut self.buffer, &mut self.terminal, action)
+    fn generate_output(&mut self, action: OutputAction) -> Output<'_, B> {
+        Output::new(self.prompt, self.buffer, self.terminal, action)
     }
 
     fn current_position(&self) -> usize {
@@ -127,7 +127,7 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
         pos - self.prompt.len()
     }
 
-    fn history_move_up<'b>(&'b mut self) -> Output<'b, B> {
+    fn history_move_up(&mut self) -> Output<'_, B> {
         let entry = if self.nav.is_active() {
             self.nav.move_up()
         } else if self.buffer.len() == 0 {
@@ -152,7 +152,7 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
         }
     }
 
-    fn history_move_down<'b>(&'b mut self) -> Output<'b, B> {
+    fn history_move_down(&mut self) -> Output<'_, B> {
         let entry = if self.nav.is_active() {
             self.nav.move_down()
         } else {
@@ -177,7 +177,7 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
 
     // Advance state machine by one byte. Returns output iterator over
     // 0 or more byte slices.
-    pub(crate) fn advance<'b>(&'b mut self, byte: u8) -> Output<'b, B> {
+    pub(crate) fn advance(&mut self, byte: u8) -> Output<'_, B> {
         let action = self.parser.advance(byte);
 
         #[cfg(test)]
@@ -313,7 +313,7 @@ pub(crate) mod tests {
     use crate::history::{NoHistory, StaticHistory, UnboundedHistory};
     use crate::line_buffer::StaticBuffer;
     use crate::terminal::Cursor;
-    use crate::testlib::{csi, AsByteVec, MockTerminal};
+    use crate::testlib::{csi, MockTerminal, ToByteVec};
 
     use super::*;
 
@@ -330,7 +330,7 @@ pub(crate) mod tests {
             let terminal = Initializer::init()
                 .iter()
                 .map(|&b| term.advance(b))
-                .filter_map(|output| output.and_then(|x| Some(x.into_iter())))
+                .filter_map(|output| output.map(|x| x.into_iter()))
                 .flatten()
                 .collect::<Vec<u8>>()
                 .into_iter()
@@ -363,11 +363,7 @@ pub(crate) mod tests {
 
             let output: Vec<u8> = line
                 .reset()
-                .into_iter()
-                .filter_map(|item| {
-                    item.get_bytes()
-                        .and_then(|bytes| Some(bytes.iter().map(|&b| b).collect::<Vec<u8>>()))
-                })
+                .filter_map(|item| item.get_bytes().map(|bytes| bytes.to_vec()))
                 .flatten()
                 .filter_map(|b| mockterm.advance(b))
                 .flatten()
@@ -375,7 +371,6 @@ pub(crate) mod tests {
 
             output.into_iter().for_each(|b| {
                 line.advance(b)
-                    .into_iter()
                     .for_each(|output| assert!(output.get_bytes().is_none()))
             });
 
@@ -386,14 +381,14 @@ pub(crate) mod tests {
         }
     }
 
-    fn advance<'a, B: Buffer, H: History>(
+    fn advance<B: Buffer, H: History>(
         terminal: &mut MockTerminal,
-        noline: &mut Line<'a, B, H>,
-        input: impl AsByteVec,
+        noline: &mut Line<'_, B, H>,
+        input: impl ToByteVec,
     ) -> core::result::Result<(), ()> {
         terminal.bell = false;
 
-        for input in input.as_byte_vec() {
+        for input in input.to_byte_vec() {
             for item in noline.advance(input) {
                 if let Some(bytes) = item.get_bytes() {
                     for &b in bytes {
@@ -414,7 +409,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn get_terminal_and_editor<'a>(
+    fn get_terminal_and_editor(
         rows: usize,
         columns: usize,
         origin: Cursor,
