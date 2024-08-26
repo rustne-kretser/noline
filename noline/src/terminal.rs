@@ -1,8 +1,8 @@
 fn distance_from_window(start: isize, end: isize, point: isize) -> isize {
     if point < start {
-        point as isize - start as isize
+        point - start
     } else if point > end {
-        point as isize - end as isize
+        point - end
     } else {
         0
     }

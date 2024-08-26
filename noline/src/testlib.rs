@@ -57,14 +57,14 @@ impl MockTerminal {
     pub fn current_line(&mut self) -> &mut Vec<char> {
         let cursor = self.get_cursor();
 
-        &mut self.screen[cursor.row as usize]
+        &mut self.screen[cursor.row]
     }
 
     pub fn screen_as_string(&self) -> String {
         self.screen
             .iter()
             .map(|v| v.iter().take_while(|&&c| c != '\0').collect::<String>())
-            .filter(|s| s.len() > 0)
+            .filter(|s| !s.is_empty())
             .collect::<Vec<String>>()
             .join("\n")
     }
@@ -106,7 +106,7 @@ impl MockTerminal {
                 let pos = self.cursor.column;
                 let line = self.current_line();
 
-                line[pos] = c.to_char();
+                line[pos] = c.as_char();
                 self.move_column(1);
             }
             Action::ControlSequenceIntroducer(csi) => match csi {
@@ -124,12 +124,8 @@ impl MockTerminal {
                 CSI::ED(_) => {
                     let cursor = self.get_cursor();
 
-                    for row in (cursor.row as usize)..self.rows {
-                        let start = if row == cursor.row as usize {
-                            cursor.column as usize
-                        } else {
-                            0
-                        };
+                    for row in cursor.row..self.rows {
+                        let start = if row == cursor.row { cursor.column } else { 0 };
                         for column in (start)..self.columns {
                             self.screen[row][column] = '\0';
                         }
@@ -195,15 +191,11 @@ impl MockTerminal {
     }
 
     pub fn listen(&mut self) {
-        loop {
-            if let Ok(b_in) = self.terminal_rx.recv() {
-                if let Some(output) = self.advance(b_in) {
-                    for b_out in output {
-                        self.keyboard_tx.send(b_out).unwrap();
-                    }
+        while let Ok(b_in) = self.terminal_rx.recv() {
+            if let Some(output) = self.advance(b_in) {
+                for b_out in output {
+                    self.keyboard_tx.send(b_out).unwrap();
                 }
-            } else {
-                break;
             }
         }
     }
@@ -220,52 +212,48 @@ impl MockTerminal {
     }
 }
 
-impl AsByteVec for &str {
-    fn as_byte_vec(self) -> Vec<u8> {
-        self.bytes().into_iter().collect()
+impl ToByteVec for &str {
+    fn to_byte_vec(self) -> Vec<u8> {
+        self.bytes().collect()
     }
 }
 
-impl AsByteVec for ControlCharacter {
-    fn as_byte_vec(self) -> Vec<u8> {
+impl ToByteVec for ControlCharacter {
+    fn to_byte_vec(self) -> Vec<u8> {
         [self.into()].into_iter().collect()
     }
 }
 
-impl AsByteVec for Vec<ControlCharacter> {
-    fn as_byte_vec(self) -> Vec<u8> {
+impl ToByteVec for Vec<ControlCharacter> {
+    fn to_byte_vec(self) -> Vec<u8> {
         self.into_iter().map(|c| c.into()).collect()
     }
 }
 
-impl<const N: usize> AsByteVec for [ControlCharacter; N] {
-    fn as_byte_vec(self) -> Vec<u8> {
+impl<const N: usize> ToByteVec for [ControlCharacter; N] {
+    fn to_byte_vec(self) -> Vec<u8> {
         self.into_iter().map(|c| c.into()).collect()
     }
 }
 
-impl AsByteVec for Vec<&str> {
-    fn as_byte_vec(self) -> Vec<u8> {
+impl ToByteVec for Vec<&str> {
+    fn to_byte_vec(self) -> Vec<u8> {
         self.into_iter()
-            .map(|s| s.as_bytes().into_iter())
-            .flatten()
-            .map(|&b| b)
+            .flat_map(|s| s.as_bytes().iter().copied())
             .collect()
     }
 }
 
-impl<const N: usize> AsByteVec for [&str; N] {
-    fn as_byte_vec(self) -> Vec<u8> {
+impl<const N: usize> ToByteVec for [&str; N] {
+    fn to_byte_vec(self) -> Vec<u8> {
         self.into_iter()
-            .map(|s| s.as_bytes().into_iter())
-            .flatten()
-            .map(|&b| b)
+            .flat_map(|s| s.as_bytes().iter().copied())
             .collect()
     }
 }
 
-pub trait AsByteVec {
-    fn as_byte_vec(self) -> Vec<u8>;
+pub trait ToByteVec {
+    fn to_byte_vec(self) -> Vec<u8>;
 }
 
 pub struct TestCase {
@@ -275,11 +263,11 @@ pub struct TestCase {
 
 impl TestCase {
     pub fn new(
-        input: impl IntoIterator<Item = impl AsByteVec>,
+        input: impl IntoIterator<Item = impl ToByteVec>,
         output: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         Self {
-            input: input.into_iter().map(|item| item.as_byte_vec()).collect(),
+            input: input.into_iter().map(|item| item.to_byte_vec()).collect(),
             output: output.into_iter().map(|s| s.into()).collect(),
         }
     }
@@ -300,7 +288,7 @@ impl TestCase {
                 }
             }
 
-            if line.len() > 0 {
+            if !line.is_empty() {
                 screen.extend(line.drain(0..));
                 screen.push('\n');
                 screen.extend(prompt.chars());
@@ -320,13 +308,13 @@ impl InputBuilder {
         Self { items: Vec::new() }
     }
 
-    fn add(&mut self, input: impl AsByteVec) {
-        self.items.extend(input.as_byte_vec().iter());
+    fn add(&mut self, input: impl ToByteVec) {
+        self.items.extend(input.to_byte_vec().iter());
     }
 }
 
-impl AsByteVec for InputBuilder {
-    fn as_byte_vec(self) -> Vec<u8> {
+impl ToByteVec for InputBuilder {
+    fn to_byte_vec(self) -> Vec<u8> {
         self.items
     }
 }

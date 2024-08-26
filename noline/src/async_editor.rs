@@ -95,13 +95,12 @@ where
         loop {
             let mut buf = [0x8; 1];
             let len = io.read(&mut buf).await?;
-            if len == 1 {
-                if Self::handle_output(line.advance(buf[0]), io)
+            if len == 1
+                && Self::handle_output(line.advance(buf[0]), io)
                     .await?
                     .is_some()
-                {
-                    break;
-                }
+            {
+                break;
             }
         }
 
@@ -114,7 +113,7 @@ where
     }
 
     /// Get history as iterator over circular slices
-    pub fn get_history<'a>(&'a self) -> impl Iterator<Item = CircularSlice<'a>> {
+    pub fn get_history(&self) -> impl Iterator<Item = CircularSlice<'_>> {
         get_history_entries(&self.history)
     }
 }

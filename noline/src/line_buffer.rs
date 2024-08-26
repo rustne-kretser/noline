@@ -57,15 +57,11 @@ impl<B: Buffer> LineBuffer<B> {
         unsafe { from_utf8_unchecked(self.as_slice()) }
     }
 
-    fn char_ranges<'a>(&'a self) -> impl Iterator<Item = (Range<usize>, char)> + 'a {
+    fn char_ranges(&self) -> impl Iterator<Item = (Range<usize>, char)> + '_ {
         let s = self.as_str();
 
         s.char_indices()
-            .zip(
-                s.char_indices()
-                    .skip(1)
-                    .chain([(s.len(), '\0')].into_iter()),
-            )
+            .zip(s.char_indices().skip(1).chain([(s.len(), '\0')]))
             .map(|((start, c), (end, _))| (start..end, c))
     }
 
@@ -173,13 +169,19 @@ impl<B: Buffer> LineBuffer<B> {
     pub fn insert_utf8_char(&mut self, char_index: usize, c: Utf8Char) -> Result<(), Utf8Char> {
         unsafe {
             self.insert_bytes(self.get_byte_position(char_index), c.as_bytes())
-                .or_else(|_| Err(c))
+                .map_err(|_| c)
         }
     }
 
     /// Insert string at char position
     pub fn insert_str(&mut self, char_index: usize, s: &str) -> Result<(), ()> {
         unsafe { self.insert_bytes(self.get_byte_position(char_index), s.as_bytes()) }
+    }
+}
+
+impl<B: Buffer> Default for LineBuffer<B> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -75,8 +75,8 @@ where
         })
     }
 
-    fn handle_output<'b, IO: Read + Write>(
-        output: Output<'b, B>,
+    fn handle_output<IO: Read + Write>(
+        output: Output<'_, B>,
         io: &mut IO,
     ) -> Result<Option<()>, NolineError> {
         for item in output {
@@ -113,10 +113,8 @@ where
         loop {
             let mut buf = [0x8; 1];
             let len = io.read(&mut buf)?;
-            if len == 1 {
-                if Self::handle_output(line.advance(buf[0]), io)?.is_some() {
-                    break;
-                }
+            if len == 1 && Self::handle_output(line.advance(buf[0]), io)?.is_some() {
+                break;
             }
         }
 
@@ -129,7 +127,7 @@ where
     }
 
     /// Get history as iterator over circular slices
-    pub fn get_history<'a>(&'a self) -> impl Iterator<Item = CircularSlice<'a>> {
+    pub fn get_history(&self) -> impl Iterator<Item = CircularSlice<'_>> {
         get_history_entries(&self.history)
     }
 }
@@ -199,9 +197,9 @@ pub mod tests {
 
     impl embedded_io::Read for MockIO {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-            for i in 0..(buf.len()) {
+            for place in &mut *buf {
                 match self.stdin.rx.recv() {
-                    Ok(byte) => buf[i] = byte,
+                    Ok(byte) => *place = byte,
                     // This should never happen as the error type is Infalliable
                     Err(_) => return Err(Self::Error::Other),
                 }
