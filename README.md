@@ -23,40 +23,30 @@ Possible future features:
 The API should be considered experimental and will change in the
 future.
 
-The core implementation consists of a state machie taking bytes as
+The core implementation consists of a state machine taking bytes as
 input and yielding iterators over byte slices. Because this is
 done without any IO, Noline can be adapted to work on any platform.
 
 Noline comes with multiple implemenations:
-- [`sync_editor::Editor`] – Editor for synchronous IO with the following wrapper:
-  - [`sync_io::IO`] – IO wrapper for [`embedded_io::Read`] and [`embedded_io::Write`]
-- [`async_editor::Editor`] - Editor for asynchronous IO with the following wrapper:
-  - [`async_io::IO`] – IO wrapper for [`embedded_io_async::Read`] and [`embedded_io_async::Write`]
-
+- [`sync_editor::Editor`] – Editor for synchronous IO
+- [`async_editor::Editor`] - Editor for asynchronous IO
 
 Editors can be built using [`builder::EditorBuilder`].
 
 ## Example
 ```rust
-use noline::{builder::EditorBuilder, sync_io::std_sync::StdIOWrapper, sync_io::IO};
-use std::fmt::Write;
-use std::io;
-use termion::raw::IntoRawMode;
+let prompt = "> ";
 
-fn main() {
-    let _stdout = io::stdout().into_raw_mode().unwrap();
-    let prompt = "> ";
+let mut io = MyIO {}; // IO handler, see full examples for details
+                      // how to implement it
 
-    let mut io = IO::<StdIOWrapper>::new(StdIOWrapper::new());
+let mut editor = EditorBuilder::new_unbounded()
+    .with_unbounded_history()
+    .build_sync(&mut io)
+    .unwrap();
 
-    let mut editor = EditorBuilder::new_unbounded()
-        .with_unbounded_history()
-        .build_sync(&mut io)
-        .unwrap();
-
-    while let Ok(line) = editor.readline(prompt, &mut io) {
-        writeln!(io, "Read: '{}'", line).unwrap();
-    }
+while let Ok(line) = editor.readline(prompt, &mut io) {
+    writeln!(io, "Read: '{}'", line).unwrap();
 }
 ```
 

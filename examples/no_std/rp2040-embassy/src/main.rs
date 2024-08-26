@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
-mod noline_async;
 mod blink;
+mod noline_async;
 mod usb;
 
 use embassy_executor::Spawner;

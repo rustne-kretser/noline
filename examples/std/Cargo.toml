@@ -18,6 +18,7 @@ noline = { path = "../../noline", features = ["std"] }
 heapless = "0.8.0"
 termion = "4.0.0"
 embedded-io-async = "0.6.1"
+embedded-io = "0.6.1"
 
 [[bin]]
 name = "std-sync"

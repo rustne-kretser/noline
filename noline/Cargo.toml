@@ -17,12 +17,11 @@ include = ["**/*.rs", "Cargo.toml"]
 embedded-io = "0.6.1"
 embedded-io-async = "0.6.1"
 num_enum = { version = "0.7.2", default-features = false }
-async-std = { version = "1.12.0", optional = true }
 
 
 [features]
-std = ["embedded-io/std", "embedded-io-async/std", "async-std"]
 default = []
+std = ["embedded-io/std", "embedded-io-async/std"]
 alloc = []
 
 [dev-dependencies]

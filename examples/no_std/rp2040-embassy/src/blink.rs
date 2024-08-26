@@ -9,7 +9,7 @@ pub async fn blinking_led(led: AnyPin) {
     loop {
         led.set_high();
         Timer::after(Duration::from_millis(750)).await;
-        
+
         led.set_low();
         Timer::after(Duration::from_millis(250)).await;
     }

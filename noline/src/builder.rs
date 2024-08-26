@@ -14,20 +14,19 @@ use crate::{history::UnboundedHistory, line_buffer::UnboundedBuffer};
 /// # Example
 /// ```no_run
 /// # use embedded_io::{Read, Write, ErrorType};
-/// # use noline::sync_io::IO;
 /// # use core::convert::Infallible;
 /// # struct MyIO {}
 /// # impl ErrorType for MyIO {
 /// #     type Error = Infallible;
 /// # }
-/// # impl Write for MyIO {
+/// # impl embedded_io::Write for MyIO {
 /// #     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> { unimplemented!() }
 /// #     fn flush(&mut self) -> Result<(), Self::Error> { unimplemented!() }
 /// # }
-/// # impl Read for MyIO {
+/// # impl embedded_io::Read for MyIO {
 /// #     fn read(&mut self, buf: &mut[u8]) -> Result<usize, Self::Error> { unimplemented!() }
 /// # }
-/// # let mut io = IO::new(MyIO {});
+/// # let mut io = MyIO {};
 /// use noline::builder::EditorBuilder;
 ///
 /// let mut editor = EditorBuilder::new_static::<100>()
@@ -87,17 +86,17 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
     }
 
     /// Build [`sync_editor::Editor`]. Is equivalent of calling [`sync_editor::Editor::new()`].
-    pub fn build_sync<RW: embedded_io::Read + embedded_io::Write>(
+    pub fn build_sync<IO: embedded_io::Read + embedded_io::Write>(
         self,
-        io: &mut sync_io::IO<RW>,
+        io: &mut IO,
     ) -> Result<sync_editor::Editor<B, H>, NolineError> {
         sync_editor::Editor::new(io)
     }
 
     /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
-    pub async fn build_async<R: embedded_io_async::Read, W: embedded_io_async::Write>(
+    pub async fn build_async<IO: embedded_io_async::Read + embedded_io_async::Write>(
         self,
-        io: &mut async_io::IO<'_, R, W>,
+        io: &mut IO,
     ) -> Result<async_editor::Editor<B, H>, NolineError> {
         async_editor::Editor::new(io).await
     }

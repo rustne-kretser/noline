@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use embedded_io::{ReadReady, WriteReady};
+use embedded_io::{ErrorKind, ErrorType, Read, ReadReady, Write, WriteReady};
 use rp_pico as bsp;
 
 use bsp::entry;
@@ -14,7 +14,6 @@ use core::fmt::Write as FmtWrite;
 
 use noline::builder::EditorBuilder;
 use noline::error::NolineError;
-use noline::sync_io::IO;
 
 use usb_device::bus::UsbBusAllocator;
 use usb_device::prelude::*;
@@ -47,17 +46,32 @@ impl<'a> SerialWrapper<'a> {
     }
 }
 
-impl<'a> embedded_io::ErrorType for SerialWrapper<'a> {
-    type Error = NolineError;
+#[derive(Debug)]
+struct Error(UsbError);
+
+impl From<UsbError> for Error {
+    fn from(value: UsbError) -> Self {
+        Self(value)
+    }
 }
 
-impl<'a> embedded_io::ReadReady for SerialWrapper<'a> {
+impl embedded_io::Error for Error {
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Other
+    }
+}
+
+impl<'a> ErrorType for SerialWrapper<'a> {
+    type Error = Error;
+}
+
+impl<'a> ReadReady for SerialWrapper<'a> {
     fn read_ready(&mut self) -> Result<bool, Self::Error> {
         Ok(self.is_ready() | self.serial.dtr() | self.serial.rts())
     }
 }
 
-impl<'a> embedded_io::Read for SerialWrapper<'a> {
+impl<'a> Read for SerialWrapper<'a> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         loop {
             while !self.read_ready()? {
@@ -69,17 +83,18 @@ impl<'a> embedded_io::Read for SerialWrapper<'a> {
                 self.ready = false;
                 continue;
             }
-            return res.map_err(|_| NolineError::ReadError(embedded_io::ErrorKind::Other));
+
+            break Ok(res?);
         }
     }
 }
 
-impl<'a> embedded_io::WriteReady for SerialWrapper<'a> {
+impl<'a> WriteReady for SerialWrapper<'a> {
     fn write_ready(&mut self) -> Result<bool, Self::Error> {
         Ok(self.is_ready() | self.serial.dtr() | self.serial.rts())
     }
 }
-impl<'a> embedded_io::Write for SerialWrapper<'a> {
+impl<'a> Write for SerialWrapper<'a> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         loop {
             while !self.write_ready()? {
@@ -91,24 +106,13 @@ impl<'a> embedded_io::Write for SerialWrapper<'a> {
                 self.ready = false;
                 continue;
             }
-            return res.map_err(|_| NolineError::WriteError(embedded_io::ErrorKind::Other));
+
+            break Ok(res?);
         }
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
-        self.serial
-            .flush()
-            .map_err(|_| NolineError::WriteError(embedded_io::ErrorKind::Other))
-    }
-}
-
-impl<'a> FmtWrite for SerialWrapper<'a> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let data = s.as_bytes();
-
-        self.serial.write(data).map_err(|_| core::fmt::Error {})?;
-
-        Ok(())
+        Ok(self.serial.flush()?)
     }
 }
 
@@ -161,7 +165,7 @@ fn main() -> ! {
 
     let prompt = "> ";
 
-    let mut io = IO::new(SerialWrapper::new(usb_dev, serial));
+    let mut io = SerialWrapper::new(usb_dev, serial);
 
     info!("Waiting for connection");
 
@@ -182,8 +186,7 @@ fn main() -> ! {
             }
             Err(err) => {
                 let error = match err {
-                    NolineError::ReadError(_) => "ReadError",
-                    NolineError::WriteError(_) => "WriteError",
+                    NolineError::IoError(_) => "IoError",
                     NolineError::ParserError => "ParserError",
                     NolineError::Aborted => "Aborted",
                 };

@@ -3,7 +3,6 @@
 //! Implementation for async Editor
 
 use crate::{
-    async_io::IO,
     core::{Initializer, InitializerResult, Line},
     error::NolineError,
     history::{get_history_entries, CircularSlice, History},
@@ -27,8 +26,8 @@ where
     H: History,
 {
     /// Create and initialize line editor
-    pub async fn new<R: embedded_io_async::Read, W: embedded_io_async::Write>(
-        io: &mut IO<'_, R, W>,
+    pub async fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
+        io: &mut IO,
     ) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
 
@@ -59,9 +58,9 @@ where
         })
     }
 
-    async fn handle_output<'b, R: embedded_io_async::Read, W: embedded_io_async::Write>(
+    async fn handle_output<'b, IO: embedded_io_async::Read + embedded_io_async::Write>(
         output: Output<'b, B>,
-        io: &mut IO<'_, R, W>,
+        io: &mut IO,
     ) -> Result<Option<()>, NolineError> {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
@@ -81,10 +80,10 @@ where
     }
 
     /// Read line from `stdin`
-    pub async fn readline<'b, R: embedded_io_async::Read, W: embedded_io_async::Write>(
+    pub async fn readline<'b, IO: embedded_io_async::Read + embedded_io_async::Write>(
         &'b mut self,
         prompt: &str,
-        io: &mut IO<'_, R, W>,
+        io: &mut IO,
     ) -> Result<&'b str, NolineError> {
         let mut line = Line::new(
             prompt,
