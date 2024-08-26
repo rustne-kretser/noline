@@ -59,11 +59,8 @@
 //! }
 //! ```
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
-#[cfg(any(test, doc, feature = "std"))]
-#[macro_use]
-extern crate std;
 pub mod async_editor;
 pub mod builder;
 mod core;
