@@ -3,19 +3,11 @@
 use core::marker::PhantomData;
 
 use crate::{
-    error::NolineError,
-    history::{History, NoHistory, StaticHistory},
-    line_buffer::{Buffer, NoBuffer, StaticBuffer},
+    async_editor, error::NolineError, history::{History, NoHistory, StaticHistory}, line_buffer::{Buffer, NoBuffer, StaticBuffer}, sync_editor
 };
 
 #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
 use crate::{history::UnboundedHistory, line_buffer::UnboundedBuffer};
-
-#[cfg(any(test, doc, feature = "sync"))]
-use crate::{sync_editor, sync_io};
-
-#[cfg(any(test, doc, feature = "async"))]
-use crate::{async_editor, async_io};
 
 /// Builder for [`sync_editor::Editor`] and [`async_editor::Editor`].
 ///
@@ -94,7 +86,6 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
         }
     }
 
-    #[cfg(any(test, doc, feature = "sync"))]
     /// Build [`sync_editor::Editor`]. Is equivalent of calling [`sync_editor::Editor::new()`].
     pub fn build_sync<RW: embedded_io::Read + embedded_io::Write>(
         self,
@@ -103,7 +94,6 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
         sync_editor::Editor::new(io)
     }
 
-    #[cfg(any(test, doc, feature = "async"))]
     /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
     pub async fn build_async<R: embedded_io_async::Read, W: embedded_io_async::Write>(
         self,

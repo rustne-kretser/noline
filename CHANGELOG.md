@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Fixed no_std examples build failure by checking in lock files
+- Removed IO abstraction
+- Fixed clippy warnings
+- Removed `sync` and `async` features
+- Removed `std` from default features
 
 ## [0.3.0 - 2024-07-05]
 
