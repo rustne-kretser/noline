@@ -588,7 +588,7 @@ mod tests {
         assert!(navigator.move_up().is_err());
         assert!(navigator.move_down().is_err());
 
-        navigator.history.add_entry("line 1");
+        navigator.history.add_entry("line 1").unwrap();
         navigator.reset();
 
         assert!(navigator.move_up().is_ok());
