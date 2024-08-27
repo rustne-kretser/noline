@@ -236,20 +236,23 @@ impl<'a> Step<'a> {
         match self {
             Print(s) => {
                 let columns_remaining = terminal.columns_remaining();
+                let split_at_char = columns_remaining.min(s.chars().count());
+                let split_at_byte = s
+                    .char_indices()
+                    .nth(split_at_char)
+                    .map(|(index, _)| index)
+                    .unwrap_or(s.len());
 
-                let (s, rest) = s.split_at(columns_remaining.min(s.len()));
+                let (s, rest) = s.split_at(split_at_byte);
 
-                #[cfg(test)]
-                dbg!(s, rest);
-
-                let position = terminal.relative_position(s.chars().count() as isize);
-                terminal.move_cursor(position);
-
-                let step = if s.len() == columns_remaining {
+                let step = if split_at_char == columns_remaining {
                     Step::NewlinePrint(rest)
                 } else {
                     Step::Done
                 };
+
+                let position = terminal.relative_position(split_at_char as isize);
+                terminal.move_cursor(position);
 
                 self.transition(step, OutputItem::Slice(s.as_bytes()))
             }
@@ -733,5 +736,29 @@ mod tests {
 
         assert_eq!(result, "\x1b[1;3H");
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 2));
+    }
+
+    #[test]
+    fn split_utf8() {
+        fn to_string(mut step: Step, terminal: &mut Terminal) -> String {
+            let mut bytes = Vec::new();
+
+            while let Some(item) = step.advance(terminal) {
+                if let Some(slice) = item.get_bytes() {
+                    for b in slice {
+                        bytes.push(*b);
+                    }
+                }
+            }
+
+            String::from_utf8(bytes).unwrap()
+        }
+
+        let mut terminal = Terminal::new(4, 10, Cursor::new(0, 0));
+
+        assert_eq!(
+            to_string(Step::Print("aadfåpadfåaåfåaadåappaåadå"), &mut terminal),
+            "aadfåpadfå\n\raåfåaadåap\n\rpaåadå"
+        );
     }
 }
