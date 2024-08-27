@@ -58,7 +58,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-noline = "0.3.0"
+noline = "0.4.0"
 ```
 
 # License
