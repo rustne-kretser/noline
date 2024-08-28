@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Bugfix: Char boundary string splitting error
+- Allow dynamic prompt made from iterator over `&str`
 
 ## [0.4.0 - 2024-08-27]
 
