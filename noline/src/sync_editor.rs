@@ -4,14 +4,14 @@
 //! traits.
 //!
 //! Use the [`crate::builder::EditorBuilder`] to build an editor.
-use embedded_io::{Read, Write};
+use embedded_io::{Read, ReadExactError, Write};
 
 use crate::error::NolineError;
 
 use crate::history::{get_history_entries, CircularSlice, History};
 use crate::line_buffer::{Buffer, LineBuffer};
 
-use crate::core::{Initializer, InitializerResult, Line};
+use crate::core::{Initializer, InitializerResult, Line, Prompt};
 use crate::output::{Output, OutputItem};
 use crate::terminal::Terminal;
 
@@ -53,18 +53,20 @@ where
         let terminal = loop {
             let mut buf = [0u8; 1];
 
-            let len = io.read(&mut buf)?;
-            if len == 1 {
-                match initializer.advance(buf[0]) {
-                    InitializerResult::Continue => (),
-                    InitializerResult::Item(terminal) => break terminal,
-                    InitializerResult::InvalidInput => {
-                        return Err(NolineError::ParserError);
-                    }
+            match io.read_exact(&mut buf) {
+                Ok(_) => (),
+                Err(err) => match err {
+                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
+                    ReadExactError::Other(err) => Err(err)?,
+                },
+            }
+
+            match initializer.advance(buf[0]) {
+                InitializerResult::Continue => (),
+                InitializerResult::Item(terminal) => break terminal,
+                InitializerResult::InvalidInput => {
+                    return Err(NolineError::ParserError);
                 }
-            } else {
-                // len == 0, which should not happen
-                return Err(NolineError::Aborted);
             }
         };
 
@@ -75,10 +77,14 @@ where
         })
     }
 
-    fn handle_output<IO: Read + Write>(
-        output: Output<'_, B>,
+    fn handle_output<'a, 'item, IO, I>(
+        output: Output<'a, B, I>,
         io: &mut IO,
-    ) -> Result<Option<()>, NolineError> {
+    ) -> Result<Option<()>, NolineError>
+    where
+        IO: Read + Write,
+        I: Iterator<Item = &'item str> + Clone,
+    {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
                 io.write(bytes)?;
@@ -97,24 +103,38 @@ where
     }
 
     /// Read line from `stdin`
-    pub fn readline<'b, IO: Read + Write>(
-        &'b mut self,
-        prompt: &'b str,
+    pub fn readline<'a, 'item, IO, I>(
+        &'a mut self,
+        prompt: impl Into<Prompt<I>>,
         io: &mut IO,
-    ) -> Result<&'b str, NolineError> {
+    ) -> Result<&str, NolineError>
+    where
+        IO: Read + Write,
+        I: Iterator<Item = &'item str> + Clone,
+    {
         let mut line = Line::new(
             prompt,
             &mut self.buffer,
             &mut self.terminal,
             &mut self.history,
         );
+
+        line.reset();
         Self::handle_output(line.reset(), io)?;
 
         loop {
             let mut buf = [0x8; 1];
-            let len = io.read(&mut buf)?;
-            if len == 1 && Self::handle_output(line.advance(buf[0]), io)?.is_some() {
-                break;
+
+            match io.read_exact(&mut buf) {
+                Ok(_) => {
+                    if Self::handle_output(line.advance(buf[0]), io)?.is_some() {
+                        break;
+                    }
+                }
+                Err(err) => match err {
+                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
+                    ReadExactError::Other(err) => Err(err)?,
+                },
             }
         }
 

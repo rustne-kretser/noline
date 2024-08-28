@@ -425,7 +425,7 @@ mod alloc {
     }
 }
 
-#[cfg(any(test, feature = "alloc", feature = "std"))]
+#[cfg(any(test, doc, feature = "alloc", feature = "std"))]
 pub use alloc::UnboundedHistory;
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use core::array::IntoIter;
 
 use crate::{
+    core::Prompt,
     line_buffer::{Buffer, LineBuffer},
     terminal::{Cursor, Position, Terminal},
 };
@@ -207,10 +208,75 @@ impl MoveCursorToPosition {
     }
 }
 
-#[cfg_attr(test, derive(Debug))]
-enum Step<'a> {
-    Print(&'a str),
-    NewlinePrint(&'a str),
+enum PrintableItem<'a> {
+    Str(&'a str),
+    Newline,
+}
+
+struct Printable<'a, I> {
+    s: &'a str,
+    newline: bool,
+    iter: Option<I>,
+}
+
+impl<'a, 'item, I> Printable<'a, I>
+where
+    I: Iterator<Item = &'item str>,
+    'item: 'a,
+{
+    fn from_str(s: &'a str) -> Self {
+        Self {
+            s,
+            newline: false,
+            iter: None,
+        }
+    }
+
+    fn from_iter(iter: I) -> Self {
+        Self {
+            s: "",
+            newline: false,
+            iter: Some(iter),
+        }
+    }
+
+    fn next_item(&mut self, max_chars: usize) -> Option<PrintableItem<'a>> {
+        if self.newline {
+            self.newline = false;
+            Some(PrintableItem::Newline)
+        } else {
+            let s = if self.s.is_empty() {
+                if let Some(iter) = &mut self.iter {
+                    iter.next()?
+                } else {
+                    return None;
+                }
+            } else {
+                self.s
+            };
+
+            let split_at_char = max_chars.min(s.chars().count());
+            let split_at_byte = s
+                .char_indices()
+                .nth(split_at_char)
+                .map(|(index, _)| index)
+                .unwrap_or(s.len());
+
+            let (s, rest) = s.split_at(split_at_byte);
+
+            if split_at_char == max_chars {
+                self.newline = true
+            }
+
+            self.s = rest;
+            Some(PrintableItem::Str(s))
+        }
+    }
+}
+
+// #[cfg_attr(test, derive(Debug))]
+enum Step<'a, I> {
+    Print(Printable<'a, I>),
     Move(MoveCursorToPosition),
     GetPosition,
     ClearLine,
@@ -222,10 +288,14 @@ enum Step<'a> {
     Done,
 }
 
-impl<'a> Step<'a> {
+impl<'a, 'item, I> Step<'a, I>
+where
+    I: Iterator<Item = &'item str>,
+    'item: 'a,
+{
     fn transition(
         &mut self,
-        new_state: Step<'a>,
+        new_state: Step<'a, I>,
         output: OutputItem<'a>,
     ) -> Option<OutputItem<'a>> {
         *self = new_state;
@@ -234,31 +304,23 @@ impl<'a> Step<'a> {
 
     fn advance(&mut self, terminal: &mut Terminal) -> Option<OutputItem<'a>> {
         match self {
-            Print(s) => {
-                let columns_remaining = terminal.columns_remaining();
-                let split_at_char = columns_remaining.min(s.chars().count());
-                let split_at_byte = s
-                    .char_indices()
-                    .nth(split_at_char)
-                    .map(|(index, _)| index)
-                    .unwrap_or(s.len());
+            Print(printable) => {
+                if let Some(item) = printable.next_item(terminal.columns_remaining()) {
+                    let s = match item {
+                        PrintableItem::Str(s) => {
+                            let position = terminal.relative_position(s.chars().count() as isize);
+                            terminal.move_cursor(position);
 
-                let (s, rest) = s.split_at(split_at_byte);
+                            s
+                        }
+                        PrintableItem::Newline => "\n\r",
+                    };
 
-                let step = if split_at_char == columns_remaining {
-                    Step::NewlinePrint(rest)
+                    Some(OutputItem::Slice(s.as_bytes()))
                 } else {
-                    Step::Done
-                };
-
-                let position = terminal.relative_position(split_at_char as isize);
-                terminal.move_cursor(position);
-
-                self.transition(step, OutputItem::Slice(s.as_bytes()))
-            }
-            NewlinePrint(s) => {
-                let step = Step::Print(s);
-                self.transition(step, OutputItem::Slice("\n\r".as_bytes()))
+                    *self = Step::Done;
+                    None
+                }
             }
             Move(pos) => {
                 if let Some(move_cursor) = pos.get_move_cursor(terminal) {
@@ -295,13 +357,12 @@ impl<'a> Step<'a> {
 
 use Step::*;
 
-#[cfg_attr(test, derive(Debug))]
-enum OutputState<'a> {
+enum OutputState<'a, I> {
     New(OutputAction),
-    OneStep(IntoIter<Step<'a>, 1>),
-    TwoSteps(IntoIter<Step<'a>, 2>),
-    ThreeSteps(IntoIter<Step<'a>, 3>),
-    FourSteps(IntoIter<Step<'a>, 4>),
+    OneStep(IntoIter<Step<'a, I>, 1>),
+    TwoSteps(IntoIter<Step<'a, I>, 2>),
+    ThreeSteps(IntoIter<Step<'a, I>, 3>),
+    FourSteps(IntoIter<Step<'a, I>, 4>),
     Done,
 }
 
@@ -313,16 +374,20 @@ fn byte_position(s: &str, char_pos: usize) -> usize {
         .unwrap_or(s.len())
 }
 
-pub struct Output<'a, B: Buffer> {
-    prompt: &'a str,
+pub struct Output<'a, B: Buffer, I> {
+    prompt: &'a Prompt<I>,
     buffer: &'a LineBuffer<B>,
     terminal: &'a mut Terminal,
-    state: OutputState<'a>,
+    state: OutputState<'a, I>,
 }
 
-impl<'a, B: Buffer> Output<'a, B> {
+impl<'a, 'item, B, I> Output<'a, B, I>
+where
+    B: Buffer,
+    I: Iterator<Item = &'item str> + Clone,
+{
     pub fn new(
-        prompt: &'a str,
+        prompt: &'a Prompt<I>,
         buffer: &'a LineBuffer<B>,
         terminal: &'a mut Terminal,
         action: OutputAction,
@@ -349,9 +414,6 @@ impl<'a, B: Buffer> Output<'a, B> {
 
         let pos = byte_position(s, offset);
 
-        #[cfg(test)]
-        dbg!(self.terminal.current_offset(), self.prompt.len(), s, pos);
-
         &s[pos..]
     }
 
@@ -374,18 +436,27 @@ impl<'a, B: Buffer> Output<'a, B> {
     }
 }
 
-impl<'a, B: Buffer> Iterator for Output<'a, B> {
+impl<'a, 'item, B, I> Iterator for Output<'a, B, I>
+where
+    B: Buffer,
+    I: Iterator<Item = &'item str> + Clone,
+    'item: 'a,
+{
     type Item = OutputItem<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        fn advance_steps<'a, const N: usize>(
-            steps: &mut IntoIter<Step<'a>, N>,
+        fn advance_steps<'a, 'item, I, const N: usize>(
+            steps: &mut IntoIter<Step<'a, I>, N>,
             terminal: &mut Terminal,
-        ) -> Option<OutputItem<'a>> {
+        ) -> Option<OutputItem<'a>>
+        where
+            I: Iterator<Item = &'item str>,
+            'item: 'a,
+        {
             loop {
                 if let Some((step, _)) = steps.as_mut_slice().split_first_mut() {
-                    #[cfg(test)]
-                    dbg!(&step);
+                    // #[cfg(test)]
+                    // dbg!(&step);
 
                     if let Some(bytes) = step.advance(terminal) {
                         break Some(bytes);
@@ -425,7 +496,9 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                         }
                         OutputAction::PrintBufferAndMoveCursorForward => OutputState::TwoSteps(
                             [
-                                Print(self.buffer_after_position(self.terminal.get_position())),
+                                Print(Printable::from_str(
+                                    self.buffer_after_position(self.terminal.get_position()),
+                                )),
                                 Move(MoveCursorToPosition::new(
                                     self.terminal.relative_position(1),
                                 )),
@@ -439,7 +512,9 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                             OutputState::ThreeSteps(
                                 [
                                     Erase,
-                                    Print(self.buffer_after_position(position)),
+                                    Print(Printable::from_str(
+                                        self.buffer_after_position(position),
+                                    )),
                                     Move(MoveCursorToPosition::new(position)),
                                 ]
                                 .into_iter(),
@@ -457,7 +532,7 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                                         rows,
                                     ))),
                                     Erase,
-                                    Print(self.prompt),
+                                    Print(Printable::from_iter(self.prompt.iter())),
                                 ]
                                 .into_iter(),
                             )
@@ -477,7 +552,9 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                             OutputState::ThreeSteps(
                                 [
                                     Move(MoveCursorToPosition::new(position)),
-                                    Print(self.buffer_after_position(position)),
+                                    Print(Printable::from_str(
+                                        self.buffer_after_position(position),
+                                    )),
                                     Move(MoveCursorToPosition::new(self.terminal.get_position())),
                                 ]
                                 .into_iter(),
@@ -490,7 +567,9 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                                 [
                                     Move(MoveCursorToPosition::new(position)),
                                     Erase,
-                                    Print(self.buffer_after_position(position)),
+                                    Print(Printable::from_str(
+                                        self.buffer_after_position(position),
+                                    )),
                                     Move(MoveCursorToPosition::new(position)),
                                 ]
                                 .into_iter(),
@@ -498,7 +577,12 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                         }
                         OutputAction::RingBell => OutputState::OneStep([Bell].into_iter()),
                         OutputAction::ClearAndPrintPrompt => OutputState::ThreeSteps(
-                            [ClearLine, Print(self.prompt), GetPosition].into_iter(),
+                            [
+                                ClearLine,
+                                Print(Printable::from_iter(self.prompt.iter())),
+                                GetPosition,
+                            ]
+                            .into_iter(),
                         ),
                         OutputAction::ClearAndPrintBuffer => {
                             let position = self.new_position(CursorMove::Start);
@@ -507,7 +591,7 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
                                 [
                                     Move(MoveCursorToPosition::new(position)),
                                     Erase,
-                                    Print(self.buffer.as_str()),
+                                    Print(Printable::from_str(self.buffer.as_str())),
                                 ]
                                 .into_iter(),
                             )
@@ -562,6 +646,8 @@ impl<'a, B: Buffer> Iterator for Output<'a, B> {
 #[cfg(test)]
 mod tests {
     use std::string::String;
+
+    use crate::core::StrIter;
 
     use super::*;
 
@@ -638,7 +724,7 @@ mod tests {
 
     #[test]
     fn step() {
-        fn to_string(mut step: Step, terminal: &mut Terminal) -> String {
+        fn to_string<'a>(mut step: Step<'a, StrIter<'a>>, terminal: &mut Terminal) -> String {
             let mut bytes = Vec::new();
 
             while let Some(item) = step.advance(terminal) {
@@ -655,14 +741,23 @@ mod tests {
         let mut terminal = Terminal::new(4, 10, Cursor::new(0, 0));
 
         assert_eq!(
-            to_string(Step::Print("01234567890123456789"), &mut terminal),
+            to_string(
+                Step::Print(Printable::from_str("01234567890123456789")),
+                &mut terminal
+            ),
             "0123456789\n\r0123456789\n\r"
         );
 
-        assert_eq!(to_string(Step::Print("01234"), &mut terminal), "01234");
+        assert_eq!(
+            to_string(Step::Print(Printable::from_str("01234")), &mut terminal),
+            "01234"
+        );
 
         assert_eq!(
-            to_string(Step::Print("5678901234567890"), &mut terminal),
+            to_string(
+                Step::Print(Printable::from_str("5678901234567890")),
+                &mut terminal
+            ),
             "56789\n\r0123456789\n\r0"
         );
 
@@ -686,7 +781,7 @@ mod tests {
 
     #[test]
     fn byte_iterator() {
-        fn to_string<B: Buffer>(output: Output<'_, B>) -> String {
+        fn to_string<B: Buffer>(output: Output<'_, B, StrIter>) -> String {
             String::from_utf8(
                 output
                     .flat_map(|item| {
@@ -701,12 +796,12 @@ mod tests {
             .unwrap()
         }
 
-        let prompt = "> ";
+        let prompt: Prompt<StrIter> = "> ".into();
         let mut line_buffer = LineBuffer::<Vec<u8>>::new();
         let mut terminal = Terminal::new(4, 10, Cursor::new(0, 0));
 
         let result = to_string(Output::new(
-            prompt,
+            &prompt,
             &line_buffer,
             &mut terminal,
             OutputAction::ClearAndPrintPrompt,
@@ -717,7 +812,7 @@ mod tests {
         line_buffer.insert_str(0, "Hello, world!").unwrap();
 
         let result = to_string(Output::new(
-            prompt,
+            &prompt,
             &line_buffer,
             &mut terminal,
             OutputAction::PrintBufferAndMoveCursorForward,
@@ -728,7 +823,7 @@ mod tests {
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 3));
 
         let result = to_string(Output::new(
-            prompt,
+            &prompt,
             &line_buffer,
             &mut terminal,
             OutputAction::MoveCursor(CursorMove::Start),
@@ -740,7 +835,7 @@ mod tests {
 
     #[test]
     fn split_utf8() {
-        fn to_string(mut step: Step, terminal: &mut Terminal) -> String {
+        fn to_string<'a>(mut step: Step<'a, StrIter<'a>>, terminal: &mut Terminal) -> String {
             let mut bytes = Vec::new();
 
             while let Some(item) = step.advance(terminal) {
@@ -757,7 +852,10 @@ mod tests {
         let mut terminal = Terminal::new(4, 10, Cursor::new(0, 0));
 
         assert_eq!(
-            to_string(Step::Print("aadfåpadfåaåfåaadåappaåadå"), &mut terminal),
+            to_string(
+                Step::Print(Printable::from_str("aadfåpadfåaåfåaadåappaåadå")),
+                &mut terminal
+            ),
             "aadfåpadfå\n\raåfåaadåap\n\rpaåadå"
         );
     }

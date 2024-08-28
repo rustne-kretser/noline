@@ -79,6 +79,65 @@ impl Initializer {
     }
 }
 
+#[cfg_attr(test, derive(Debug))]
+pub struct Prompt<I> {
+    parts: I,
+    len: usize,
+}
+
+impl<'a, I> Prompt<I>
+where
+    I: Iterator<Item = &'a str> + Clone,
+{
+    fn new(parts: I) -> Self {
+        Self {
+            len: parts.clone().map(|part| part.len()).sum(),
+            parts,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+}
+
+impl<'a, I> Prompt<I>
+where
+    I: Iterator<Item = &'a str> + Clone,
+{
+    pub fn iter(&self) -> I {
+        self.parts.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct StrIter<'a> {
+    s: Option<&'a str>,
+}
+
+impl<'a> Iterator for StrIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.s.take()
+    }
+}
+
+impl<'a> From<&'a str> for Prompt<StrIter<'a>> {
+    fn from(value: &'a str) -> Self {
+        Self::new(StrIter { s: Some(value) })
+    }
+}
+
+impl<'a, I> From<I> for Prompt<I>
+where
+    I: Iterator<Item = &'a str> + Clone,
+{
+    fn from(value: I) -> Self {
+        Self::new(value)
+    }
+}
+
 // State machine for reading single line.
 //
 // Provide input by calling [`Line::advance`], returning
@@ -88,17 +147,22 @@ impl Initializer {
 // line, get cursor position and print prompt. Call [`Line::advance`]
 // for each byte read from input and print bytes from
 // [`crate::output::Output`] to output.
-pub struct Line<'a, B: Buffer, H: History> {
+pub struct Line<'a, B: Buffer, H: History, I> {
     buffer: &'a mut LineBuffer<B>,
     terminal: &'a mut Terminal,
     parser: Parser,
-    prompt: &'a str,
+    prompt: Prompt<I>,
     nav: HistoryNavigator<'a, H>,
 }
 
-impl<'a, B: Buffer, H: History> Line<'a, B, H> {
+impl<'a, 'item, 'output, B: Buffer, H: History, I> Line<'a, B, H, I>
+where
+    I: Iterator<Item = &'item str> + Clone + 'a,
+    'item: 'output,
+    'a: 'output,
+{
     pub fn new(
-        prompt: &'a str,
+        prompt: impl Into<Prompt<I>>,
         buffer: &'a mut LineBuffer<B>,
         terminal: &'a mut Terminal,
         history: &'a mut H,
@@ -107,19 +171,19 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
             buffer,
             terminal,
             parser: Parser::new(),
-            prompt,
+            prompt: prompt.into(),
             nav: HistoryNavigator::new(history),
         }
     }
 
     // Truncate buffer, clear line and print prompt
-    pub fn reset(&mut self) -> Output<'_, B> {
+    pub fn reset(&mut self) -> Output<'_, B, I> {
         self.buffer.truncate();
         self.generate_output(ClearAndPrintPrompt)
     }
 
-    fn generate_output(&mut self, action: OutputAction) -> Output<'_, B> {
-        Output::new(self.prompt, self.buffer, self.terminal, action)
+    fn generate_output(&mut self, action: OutputAction) -> Output<'_, B, I> {
+        Output::new(&self.prompt, self.buffer, self.terminal, action)
     }
 
     fn current_position(&self) -> usize {
@@ -127,7 +191,7 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
         pos - self.prompt.len()
     }
 
-    fn history_move_up(&mut self) -> Output<'_, B> {
+    fn history_move_up(&mut self) -> Output<'_, B, I> {
         let entry = if self.nav.is_active() {
             self.nav.move_up()
         } else if self.buffer.len() == 0 {
@@ -152,7 +216,7 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
         }
     }
 
-    fn history_move_down(&mut self) -> Output<'_, B> {
+    fn history_move_down(&mut self) -> Output<'_, B, I> {
         let entry = if self.nav.is_active() {
             self.nav.move_down()
         } else {
@@ -177,7 +241,7 @@ impl<'a, B: Buffer, H: History> Line<'a, B, H> {
 
     // Advance state machine by one byte. Returns output iterator over
     // 0 or more byte slices.
-    pub(crate) fn advance(&mut self, byte: u8) -> Output<'_, B> {
+    pub(crate) fn advance(&mut self, byte: u8) -> Output<'_, B, I> {
         let action = self.parser.advance(byte);
 
         #[cfg(test)]
@@ -348,11 +412,11 @@ pub(crate) mod tests {
             }
         }
 
-        fn get_line<'b>(
-            &'b mut self,
-            prompt: &'b str,
+        fn get_line(
+            &mut self,
+            prompt: &'static str,
             mockterm: &mut MockTerminal,
-        ) -> Line<'b, B, H> {
+        ) -> Line<'_, B, H, StrIter> {
             let cursor = mockterm.get_cursor();
             let mut line = Line::new(
                 prompt,
@@ -381,9 +445,9 @@ pub(crate) mod tests {
         }
     }
 
-    fn advance<B: Buffer, H: History>(
+    fn advance<'a, B: Buffer, H: History>(
         terminal: &mut MockTerminal,
-        noline: &mut Line<'_, B, H>,
+        noline: &mut Line<'a, B, H, StrIter<'a>>,
         input: impl ToByteVec,
     ) -> core::result::Result<(), ()> {
         terminal.bell = false;
@@ -486,6 +550,10 @@ pub(crate) mod tests {
         advance(&mut terminal, &mut line, CtrlU).unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 2));
         assert_eq!(terminal.screen_as_string(), "> ");
+
+        advance(&mut terminal, &mut line, "Hello, World!").unwrap();
+        assert_eq!(terminal.get_cursor(), Cursor::new(1, 15));
+        assert_eq!(terminal.screen_as_string(), "> Hello, World!");
     }
 
     #[test]
@@ -502,6 +570,10 @@ pub(crate) mod tests {
         advance(&mut terminal, &mut line, CtrlL).unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(0, 2));
         assert_eq!(terminal.screen_as_string(), "> ");
+
+        advance(&mut terminal, &mut line, "Hello, World!").unwrap();
+        assert_eq!(terminal.get_cursor(), Cursor::new(0, 15));
+        assert_eq!(terminal.screen_as_string(), "> Hello, World!");
     }
 
     #[test]

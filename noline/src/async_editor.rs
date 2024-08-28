@@ -2,8 +2,10 @@
 
 //! Implementation for async Editor
 
+use embedded_io_async::ReadExactError;
+
 use crate::{
-    core::{Initializer, InitializerResult, Line},
+    core::{Initializer, InitializerResult, Line, Prompt},
     error::NolineError,
     history::{get_history_entries, CircularSlice, History},
     line_buffer::{Buffer, LineBuffer},
@@ -37,17 +39,20 @@ where
 
         let terminal = loop {
             let mut buf = [0u8; 1];
-            let len = io.read(&mut buf).await?;
+            // let len = io.read_exact(&mut buf).await?;
 
-            if len == 1 {
-                match initializer.advance(buf[0]) {
-                    InitializerResult::Continue => (),
-                    InitializerResult::Item(terminal) => break terminal,
-                    InitializerResult::InvalidInput => return Err(NolineError::ParserError),
-                }
-            } else {
-                // len == 0, which should not happen
-                return Err(NolineError::Aborted);
+            match io.read_exact(&mut buf).await {
+                Ok(_) => (),
+                Err(err) => match err {
+                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
+                    ReadExactError::Other(err) => Err(err)?,
+                },
+            }
+
+            match initializer.advance(buf[0]) {
+                InitializerResult::Continue => (),
+                InitializerResult::Item(terminal) => break terminal,
+                InitializerResult::InvalidInput => return Err(NolineError::ParserError),
             }
         };
 
@@ -58,10 +63,14 @@ where
         })
     }
 
-    async fn handle_output<'b, IO: embedded_io_async::Read + embedded_io_async::Write>(
-        output: Output<'b, B>,
+    async fn handle_output<'b, 'item, IO, I>(
+        output: Output<'b, B, I>,
         io: &mut IO,
-    ) -> Result<Option<()>, NolineError> {
+    ) -> Result<Option<()>, NolineError>
+    where
+        IO: embedded_io_async::Read + embedded_io_async::Write,
+        I: Iterator<Item = &'item str> + Clone,
+    {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
                 io.write(bytes).await?;
@@ -80,11 +89,15 @@ where
     }
 
     /// Read line from `stdin`
-    pub async fn readline<'b, IO: embedded_io_async::Read + embedded_io_async::Write>(
+    pub async fn readline<'b, 'item, IO, I>(
         &'b mut self,
-        prompt: &str,
+        prompt: impl Into<Prompt<I>>,
         io: &mut IO,
-    ) -> Result<&'b str, NolineError> {
+    ) -> Result<&'b str, NolineError>
+    where
+        IO: embedded_io_async::Read + embedded_io_async::Write,
+        I: Iterator<Item = &'item str> + Clone,
+    {
         let mut line = Line::new(
             prompt,
             &mut self.buffer,
@@ -92,15 +105,23 @@ where
             &mut self.history,
         );
         Self::handle_output(line.reset(), io).await?;
+
         loop {
             let mut buf = [0x8; 1];
-            let len = io.read(&mut buf).await?;
-            if len == 1
-                && Self::handle_output(line.advance(buf[0]), io)
-                    .await?
-                    .is_some()
-            {
-                break;
+
+            match io.read_exact(&mut buf).await {
+                Ok(_) => {
+                    if Self::handle_output(line.advance(buf[0]), io)
+                        .await?
+                        .is_some()
+                    {
+                        break;
+                    }
+                }
+                Err(err) => match err {
+                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
+                    ReadExactError::Other(err) => Err(err)?,
+                },
             }
         }
 
