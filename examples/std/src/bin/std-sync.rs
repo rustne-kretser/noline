@@ -31,11 +31,7 @@ impl ErrorType for IOWrapper {
 
 impl EmbRead for IOWrapper {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let _ = self
-            .stdin
-            .read_exact(&mut buf[0..1])
-            .map_err(|e| e.kind())?;
-        Ok(1)
+        Ok(self.stdin.read(buf).map_err(|e| e.kind())?)
     }
 }
 
