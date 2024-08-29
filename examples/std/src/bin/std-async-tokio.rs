@@ -40,7 +40,7 @@ impl embedded_io_async::Write for IOWrapper {
     }
 }
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let term_task = tokio::spawn(async {
         let _raw_term = std::io::stdout().into_raw_mode().unwrap();
