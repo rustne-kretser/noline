@@ -280,7 +280,7 @@ impl<const N: usize> Buffer for StaticBuffer<N> {
     }
 }
 
-#[cfg(any(test, feature = "alloc", feature = "std"))]
+#[cfg(any(test, doc, feature = "alloc", feature = "std"))]
 mod alloc {
     extern crate alloc;
 
@@ -316,7 +316,7 @@ mod alloc {
     }
 }
 
-#[cfg(any(test, feature = "alloc", feature = "std"))]
+#[cfg(any(test, doc, feature = "alloc", feature = "std"))]
 pub use self::alloc::*;
 
 #[cfg(test)]
