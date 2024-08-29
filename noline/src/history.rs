@@ -376,7 +376,7 @@ impl<'a, H: History> HistoryNavigator<'a, H> {
     }
 }
 
-#[cfg(any(test, feature = "alloc", feature = "std"))]
+#[cfg(any(test, doc, feature = "alloc", feature = "std"))]
 mod alloc {
     use super::*;
     use alloc::{

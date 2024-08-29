@@ -57,7 +57,7 @@ impl EditorBuilder<NoBuffer, NoHistory> {
         }
     }
 
-    #[cfg(any(test, feature = "alloc", feature = "std"))]
+    #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
     /// Create builder for editor with unbounded buffer
     ///
     /// # Example
