@@ -24,14 +24,10 @@ impl embedded_io_async::ErrorType for IOWrapper {
 
 impl embedded_io_async::Read for IOWrapper {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let mut b = [0];
-        let _ = self
-            .stdin
-            .read_exact(&mut b)
+        self.stdin
+            .read(buf)
             .await
-            .map_err(|e| Self::Error::from(e.kind()))?;
-        buf[0] = b[0];
-        Ok(1)
+            .map_err(|e| Self::Error::from(e.kind()))
     }
 }
 
