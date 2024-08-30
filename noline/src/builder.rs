@@ -6,7 +6,7 @@ use crate::{
     async_editor,
     error::NolineError,
     history::{History, NoHistory, StaticHistory},
-    line_buffer::{Buffer, NoBuffer, StaticBuffer},
+    line_buffer::{Buffer, LineBuffer, NoBuffer, SliceBuffer},
     sync_editor,
 };
 
@@ -33,12 +33,14 @@ use crate::{history::UnboundedHistory, line_buffer::UnboundedBuffer};
 /// # let mut io = MyIO {};
 /// use noline::builder::EditorBuilder;
 ///
-/// let mut editor = EditorBuilder::new_static::<100>()
+/// let mut buffer = [0; 100];
+/// let mut editor = EditorBuilder::from_slice(&mut buffer)
 ///     .with_static_history::<200>()
 ///     .build_sync(&mut io)
 ///     .unwrap();
 /// ```
 pub struct EditorBuilder<B: Buffer, H: History> {
+    line_buffer: LineBuffer<B>,
     _marker: PhantomData<(B, H)>,
 }
 
@@ -49,10 +51,12 @@ impl EditorBuilder<NoBuffer, NoHistory> {
     /// ```
     /// use noline::builder::EditorBuilder;
     ///
-    /// let builder = EditorBuilder::new_static::<100>();
+    /// let mut buffer = [0; 100];
+    /// let builder = EditorBuilder::from_slice(&mut buffer);
     /// ```
-    pub fn new_static<const N: usize>() -> EditorBuilder<StaticBuffer<N>, NoHistory> {
+    pub fn from_slice(buffer: &mut [u8]) -> EditorBuilder<SliceBuffer<'_>, NoHistory> {
         EditorBuilder {
+            line_buffer: LineBuffer::from_slice(buffer),
             _marker: PhantomData,
         }
     }
@@ -68,6 +72,7 @@ impl EditorBuilder<NoBuffer, NoHistory> {
     /// ```
     pub fn new_unbounded() -> EditorBuilder<UnboundedBuffer, NoHistory> {
         EditorBuilder {
+            line_buffer: LineBuffer::new_unbounded(),
             _marker: PhantomData,
         }
     }
@@ -77,6 +82,7 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
     /// Add static history
     pub fn with_static_history<const N: usize>(self) -> EditorBuilder<B, StaticHistory<N>> {
         EditorBuilder {
+            line_buffer: self.line_buffer,
             _marker: PhantomData,
         }
     }
@@ -85,6 +91,7 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
     /// Add unbounded history
     pub fn with_unbounded_history(self) -> EditorBuilder<B, UnboundedHistory> {
         EditorBuilder {
+            line_buffer: self.line_buffer,
             _marker: PhantomData,
         }
     }
@@ -94,7 +101,7 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
         self,
         io: &mut IO,
     ) -> Result<sync_editor::Editor<B, H>, NolineError> {
-        sync_editor::Editor::new(io)
+        sync_editor::Editor::new(self.line_buffer, io)
     }
 
     /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
@@ -102,6 +109,6 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
         self,
         io: &mut IO,
     ) -> Result<async_editor::Editor<B, H>, NolineError> {
-        async_editor::Editor::new(io).await
+        async_editor::Editor::new(self.line_buffer, io).await
     }
 }

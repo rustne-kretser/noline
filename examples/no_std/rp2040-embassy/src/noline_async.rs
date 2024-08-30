@@ -108,6 +108,7 @@ pub async fn cli<'d, T: Instance + 'd>(
     let prompt = "> ";
 
     let mut io = IO::new(recv, send);
+    let buffer = [0; MAX_LINE_SIZE];
 
     loop {
         io.stdout.wait_connection().await;
@@ -116,7 +117,7 @@ pub async fn cli<'d, T: Instance + 'd>(
             control.control_changed().await;
         }
 
-        let mut editor = EditorBuilder::new_static::<MAX_LINE_SIZE>()
+        let mut editor = EditorBuilder::from_slice(&mut buffer)
             .with_static_history::<MAX_LINE_SIZE>()
             .build_async(&mut io)
             .await
