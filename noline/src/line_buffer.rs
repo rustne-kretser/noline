@@ -8,7 +8,7 @@ use crate::utf8::Utf8Char;
 use core::{ops::Range, str::from_utf8_unchecked};
 
 /// Trait for defining underlying buffer
-pub trait Buffer: Default {
+pub trait Buffer {
     /// Return the current length of the buffer. This represents the
     /// number of bytes currently in the buffer, not the capacity.
     fn buffer_len(&self) -> usize;
@@ -34,12 +34,16 @@ pub struct LineBuffer<B: Buffer> {
     buf: B,
 }
 
-impl<B: Buffer> LineBuffer<B> {
-    /// Create new line buffer
-    pub fn new() -> Self {
-        Self { buf: B::default() }
+impl<'a> LineBuffer<SliceBuffer<'a>> {
+    /// Create new static line buffer
+    pub fn from_slice(buffer: &'a mut [u8]) -> Self {
+        Self {
+            buf: SliceBuffer::new(buffer),
+        }
     }
+}
 
+impl<B: Buffer> LineBuffer<B> {
     /// Return buffer as bytes slice
     pub fn as_slice(&self) -> &[u8] {
         self.buf.as_slice()
@@ -179,20 +183,8 @@ impl<B: Buffer> LineBuffer<B> {
     }
 }
 
-impl<B: Buffer> Default for LineBuffer<B> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Emtpy buffer used for builder
 pub struct NoBuffer {}
-
-impl Default for NoBuffer {
-    fn default() -> Self {
-        unimplemented!()
-    }
-}
 
 impl Buffer for NoBuffer {
     fn buffer_len(&self) -> usize {
@@ -220,34 +212,25 @@ impl Buffer for NoBuffer {
     }
 }
 
-/// Static buffer backed by array
-pub struct StaticBuffer<const N: usize> {
-    array: [u8; N],
+/// Static buffer backed by slice
+pub struct SliceBuffer<'a> {
+    data: &'a mut [u8],
     len: usize,
 }
 
-impl<const N: usize> StaticBuffer<N> {
-    pub fn new() -> Self {
-        Self {
-            array: [0; N],
-            len: 0,
-        }
+impl<'a> SliceBuffer<'a> {
+    pub fn new(data: &'a mut [u8]) -> Self {
+        Self { data, len: 0 }
     }
 }
 
-impl<const N: usize> Default for StaticBuffer<N> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<const N: usize> Buffer for StaticBuffer<N> {
+impl<'a> Buffer for SliceBuffer<'a> {
     fn buffer_len(&self) -> usize {
         self.len
     }
 
     fn capacity(&self) -> Option<usize> {
-        Some(N)
+        Some(self.data.len())
     }
 
     fn truncate_buffer(&mut self, index: usize) {
@@ -256,18 +239,18 @@ impl<const N: usize> Buffer for StaticBuffer<N> {
 
     fn insert_byte(&mut self, index: usize, byte: u8) {
         for i in (index..self.len).rev() {
-            self.array[i + 1] = self.array[i];
+            self.data[i + 1] = self.data[i];
         }
 
-        self.array[index] = byte;
+        self.data[index] = byte;
         self.len += 1;
     }
 
     fn remove_byte(&mut self, index: usize) -> u8 {
-        let byte = self.array[index];
+        let byte = self.data[index];
 
         for i in index..(self.len - 1) {
-            self.array[i] = self.array[i + 1];
+            self.data[i] = self.data[i + 1];
         }
 
         self.len -= 1;
@@ -276,7 +259,7 @@ impl<const N: usize> Buffer for StaticBuffer<N> {
     }
 
     fn as_slice(&self) -> &[u8] {
-        &self.array[0..self.len]
+        &self.data[0..self.len]
     }
 }
 
@@ -287,11 +270,28 @@ mod alloc {
     use self::alloc::vec::Vec;
     use super::*;
 
-    pub type UnboundedBuffer = Vec<u8>;
+    impl LineBuffer<UnboundedBuffer> {
+        /// Create new static line buffer
+        pub fn new_unbounded() -> Self {
+            Self {
+                buf: UnboundedBuffer::new(),
+            }
+        }
+    }
+
+    pub struct UnboundedBuffer {
+        vec: Vec<u8>,
+    }
+
+    impl UnboundedBuffer {
+        pub fn new() -> Self {
+            Self { vec: Vec::new() }
+        }
+    }
 
     impl Buffer for UnboundedBuffer {
         fn buffer_len(&self) -> usize {
-            self.len()
+            self.vec.len()
         }
 
         fn capacity(&self) -> Option<usize> {
@@ -299,19 +299,19 @@ mod alloc {
         }
 
         fn truncate_buffer(&mut self, index: usize) {
-            self.truncate(index)
+            self.vec.truncate(index)
         }
 
         fn insert_byte(&mut self, index: usize, byte: u8) {
-            self.insert(index, byte);
+            self.vec.insert(index, byte);
         }
 
         fn remove_byte(&mut self, index: usize) -> u8 {
-            self.remove(index)
+            self.vec.remove(index)
         }
 
         fn as_slice(&self) -> &[u8] {
-            self.as_slice()
+            self.vec.as_slice()
         }
     }
 }
@@ -321,13 +321,12 @@ pub use self::alloc::*;
 
 #[cfg(test)]
 mod tests {
-    use std::vec::Vec;
-
     use super::*;
 
     #[test]
-    fn static_buffer() {
-        let mut buf: StaticBuffer<20> = StaticBuffer::new();
+    fn slice_buffer() {
+        let mut array = [0; 20];
+        let mut buf = SliceBuffer::new(&mut array);
 
         for i in 0..20 {
             buf.insert_byte(i, 0x30);
@@ -409,8 +408,9 @@ mod tests {
     }
 
     #[test]
-    fn test_static_line_buffer() {
-        let mut buf = LineBuffer::<StaticBuffer<80>>::new();
+    fn test_slice_line_buffer() {
+        let mut array = [0; 80];
+        let mut buf = LineBuffer::from_slice(&mut array);
 
         test_line_buffer(&mut buf);
 
@@ -427,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_alloc_line_buffer() {
-        let mut buf = LineBuffer::<Vec<u8>>::new();
+        let mut buf = LineBuffer::new_unbounded();
 
         test_line_buffer(&mut buf);
 

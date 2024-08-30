@@ -797,7 +797,7 @@ mod tests {
         }
 
         let prompt: Prompt<StrIter> = "> ".into();
-        let mut line_buffer = LineBuffer::<Vec<u8>>::new();
+        let mut line_buffer = LineBuffer::new_unbounded();
         let mut terminal = Terminal::new(4, 10, Cursor::new(0, 0));
 
         let result = to_string(Output::new(

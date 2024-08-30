@@ -29,6 +29,7 @@ where
 {
     /// Create and initialize line editor
     pub async fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
+        buffer: LineBuffer<B>,
         io: &mut IO,
     ) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
@@ -57,7 +58,7 @@ where
         };
 
         Ok(Self {
-            buffer: LineBuffer::new(),
+            buffer,
             terminal,
             history: H::default(),
         })
