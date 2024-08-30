@@ -374,7 +374,7 @@ pub(crate) mod tests {
 
     use std::string::String;
 
-    use crate::history::{NoHistory, StaticHistory, UnboundedHistory};
+    use crate::history::{NoHistory, SliceHistory, UnboundedHistory};
     use crate::line_buffer::UnboundedBuffer;
     use crate::terminal::Cursor;
     use crate::testlib::{csi, MockTerminal, ToByteVec};
@@ -388,7 +388,7 @@ pub(crate) mod tests {
     }
 
     impl<B: Buffer, H: History> Editor<B, H> {
-        fn new(buffer: LineBuffer<B>, term: &mut MockTerminal) -> Self {
+        fn new(buffer: LineBuffer<B>, history: H, term: &mut MockTerminal) -> Self {
             let mut initializer = Initializer::new();
 
             let terminal = Initializer::init()
@@ -408,7 +408,7 @@ pub(crate) mod tests {
             Self {
                 buffer,
                 terminal,
-                history: H::default(),
+                history,
             }
         }
 
@@ -480,7 +480,7 @@ pub(crate) mod tests {
     ) -> (MockTerminal, Editor<UnboundedBuffer, NoHistory>) {
         let mut terminal = MockTerminal::new(rows, columns, origin);
 
-        let editor = Editor::new(LineBuffer::new_unbounded(), &mut terminal);
+        let editor = Editor::new(LineBuffer::new_unbounded(), NoHistory {}, &mut terminal);
 
         assert_eq!(terminal.get_cursor(), origin);
 
@@ -772,8 +772,11 @@ pub(crate) mod tests {
     fn slice_buffer() {
         let mut array = [0; 20];
         let mut terminal = MockTerminal::new(20, 80, Cursor::new(0, 0));
-        let mut editor: Editor<_, NoHistory> =
-            Editor::new(LineBuffer::from_slice(&mut array), &mut terminal);
+        let mut editor: Editor<_, NoHistory> = Editor::new(
+            LineBuffer::from_slice(&mut array),
+            NoHistory {},
+            &mut terminal,
+        );
 
         let mut line = editor.get_line("> ", &mut terminal);
 
@@ -790,9 +793,10 @@ pub(crate) mod tests {
 
     #[test]
     fn history() {
-        fn test<H: History>() {
+        fn test<H: History>(history: H) {
             let mut terminal = MockTerminal::new(20, 80, Cursor::new(0, 0));
-            let mut editor: Editor<_, H> = Editor::new(LineBuffer::new_unbounded(), &mut terminal);
+            let mut editor: Editor<_, H> =
+                Editor::new(LineBuffer::new_unbounded(), history, &mut terminal);
 
             let mut line = editor.get_line("> ", &mut terminal);
 
@@ -881,7 +885,8 @@ pub(crate) mod tests {
             );
         }
 
-        test::<UnboundedHistory>();
-        test::<StaticHistory<128>>();
+        test(UnboundedHistory::new());
+        let mut buffer = [0; 128];
+        test(SliceHistory::new(&mut buffer));
     }
 }

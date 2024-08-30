@@ -8,13 +8,14 @@ use core::{
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 #[cfg_attr(test, derive(Debug))]
-struct CircularIndex<const N: usize> {
+struct CircularIndex {
     index: usize,
+    size: usize,
 }
 
-impl<const N: usize> CircularIndex<N> {
-    fn new(index: usize) -> Self {
-        Self { index }
+impl CircularIndex {
+    fn new(index: usize, size: usize) -> Self {
+        Self { index, size }
     }
 
     fn set(&mut self, index: usize) {
@@ -30,23 +31,25 @@ impl<const N: usize> CircularIndex<N> {
     }
 
     fn index(&self) -> usize {
-        self.index % N
+        self.index % self.size
     }
 
-    fn diff(&self, other: CircularIndex<N>) -> isize {
+    fn diff(&self, other: CircularIndex) -> isize {
         self.index as isize - other.index as isize
     }
 }
 
-struct Window<const N: usize> {
-    start: CircularIndex<N>,
-    end: CircularIndex<N>,
+struct Window {
+    size: usize,
+    start: CircularIndex,
+    end: CircularIndex,
 }
 
-impl<const N: usize> Window<N> {
-    fn new(start: CircularIndex<N>, end: CircularIndex<N>) -> Self {
-        assert!(start <= end);
-        Self { start, end }
+impl Window {
+    fn new(size: usize) -> Self {
+        let start = CircularIndex::new(0, size);
+        let end = CircularIndex::new(0, size);
+        Self { size, start, end }
     }
 
     fn len(&self) -> usize {
@@ -56,7 +59,7 @@ impl<const N: usize> Window<N> {
     fn widen(&mut self) {
         self.end.increment();
 
-        if self.end.diff(self.start) as usize > N {
+        if self.end.diff(self.start) as usize > self.size {
             self.start.increment();
         }
     }
@@ -162,7 +165,7 @@ impl<'a> IntoIterator for CircularSlice<'a> {
 }
 
 /// Trait for line history
-pub trait History: Default {
+pub trait History {
     /// Return entry at index, or None if out of bounds
     fn get_entry(&self, index: usize) -> Option<CircularSlice<'_>>;
 
@@ -193,27 +196,28 @@ pub(crate) fn get_history_entries<H: History>(
 }
 
 /// Static history backed by array
-pub struct StaticHistory<const N: usize> {
-    buffer: [u8; N],
-    window: Window<N>,
+pub struct SliceHistory<'a> {
+    buffer: &'a mut [u8],
+    window: Window,
 }
 
-impl<const N: usize> StaticHistory<N> {
+impl<'a> SliceHistory<'a> {
     /// Create new static history
-    pub fn new() -> Self {
+    pub fn new(buffer: &'a mut [u8]) -> Self {
         Self {
-            buffer: [0; N],
-            window: Window::new(CircularIndex::new(0), CircularIndex::new(0)),
+            window: Window::new(buffer.len()),
+            buffer,
         }
     }
 
     fn get_available_range(&self) -> CircularRange {
-        CircularRange::new(self.window.end(), self.window.end(), N, N)
+        let len = self.buffer.len();
+        CircularRange::new(self.window.end(), self.window.end(), len, len)
     }
 
     fn get_buffer(&self) -> CircularSlice<'_> {
         CircularSlice::new(
-            &self.buffer,
+            self.buffer,
             self.window.start(),
             self.window.end(),
             self.window.len(),
@@ -232,7 +236,12 @@ impl<const N: usize> StaticHistory<N> {
             .zip(delimeters.chain([self.window.end()]))
             .filter_map(|(start, end)| {
                 if start != end {
-                    Some(CircularRange::new(start, end, self.window.len(), N))
+                    Some(CircularRange::new(
+                        start,
+                        end,
+                        self.window.len(),
+                        self.buffer.len(),
+                    ))
                 } else {
                     None
                 }
@@ -241,19 +250,13 @@ impl<const N: usize> StaticHistory<N> {
 
     fn get_entries(&self) -> impl Iterator<Item = CircularSlice<'_>> {
         self.get_entry_ranges()
-            .map(|range| CircularSlice::from_range(&self.buffer, range))
+            .map(|range| CircularSlice::from_range(self.buffer, range))
     }
 }
 
-impl<const N: usize> Default for StaticHistory<N> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<const N: usize> History for StaticHistory<N> {
-    fn add_entry<'a>(&mut self, entry: &'a str) -> Result<(), &'a str> {
-        if entry.len() + 1 > N {
+impl<'a> History for SliceHistory<'a> {
+    fn add_entry<'b>(&mut self, entry: &'b str) -> Result<(), &'b str> {
+        if entry.len() + 1 > self.buffer.len() {
             return Err(entry);
         }
 
@@ -509,7 +512,8 @@ mod tests {
 
     #[test]
     fn static_history() {
-        let mut history: StaticHistory<10> = StaticHistory::new();
+        let mut buffer = [0; 10];
+        let mut history: SliceHistory = SliceHistory::new(&mut buffer);
 
         assert_eq!(history.get_available_range().get_ranges(), (0..10, 0..0));
 

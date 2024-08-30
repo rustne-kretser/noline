@@ -170,8 +170,9 @@ fn main() -> ! {
     info!("Waiting for connection");
 
     let mut buffer = [0; 128];
+    let mut history = [0; 128];
     let mut editor = EditorBuilder::from_slice(&mut buffer)
-        .with_static_history::<128>()
+        .with_slice_history(&mut history)
         .build_sync(&mut io)
         .unwrap();
 

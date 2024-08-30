@@ -43,7 +43,11 @@ where
     H: History,
 {
     /// Create and initialize line editor
-    pub fn new<IO: Read + Write>(buffer: LineBuffer<B>, io: &mut IO) -> Result<Self, NolineError> {
+    pub fn new<IO: Read + Write>(
+        buffer: LineBuffer<B>,
+        history: H,
+        io: &mut IO,
+    ) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
 
         io.write(Initializer::init())?;
@@ -73,7 +77,7 @@ where
         Ok(Self {
             buffer,
             terminal,
-            history: H::default(),
+            history,
         })
     }
 
