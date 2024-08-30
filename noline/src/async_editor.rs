@@ -30,6 +30,7 @@ where
     /// Create and initialize line editor
     pub async fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
         buffer: LineBuffer<B>,
+        history: H,
         io: &mut IO,
     ) -> Result<Self, NolineError> {
         let mut initializer = Initializer::new();
@@ -60,7 +61,7 @@ where
         Ok(Self {
             buffer,
             terminal,
-            history: H::default(),
+            history,
         })
     }
 
