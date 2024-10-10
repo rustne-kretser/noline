@@ -374,7 +374,7 @@ pub(crate) mod tests {
 
     use std::string::String;
 
-    use crate::history::{NoHistory, SliceHistory, UnboundedHistory};
+    use crate::history::{NoHistory, SliceHistory, AllocHistory};
     use crate::line_buffer::UnboundedBuffer;
     use crate::terminal::Cursor;
     use crate::testlib::{csi, MockTerminal, ToByteVec};
@@ -885,7 +885,7 @@ pub(crate) mod tests {
             );
         }
 
-        test(UnboundedHistory::new());
+        test(AllocHistory::new(10));
         let mut buffer = [0; 128];
         test(SliceHistory::new(&mut buffer));
     }

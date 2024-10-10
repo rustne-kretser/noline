@@ -51,7 +51,7 @@ fn main() {
     let mut io = IOWrapper::new();
 
     let mut editor = EditorBuilder::new_unbounded()
-        .with_unbounded_history()
+        .with_alloc_history(100)
         .build_sync(&mut io)
         .unwrap();
 

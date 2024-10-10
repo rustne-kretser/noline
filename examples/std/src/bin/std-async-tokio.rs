@@ -49,7 +49,7 @@ async fn main() {
         let prompt = "> ";
 
         let mut editor = EditorBuilder::new_unbounded()
-            .with_unbounded_history()
+            .with_alloc_history(100)
             .build_async(&mut io)
             .await
             .unwrap();

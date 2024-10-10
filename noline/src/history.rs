@@ -381,32 +381,30 @@ impl<'a, H: History> HistoryNavigator<'a, H> {
 
 #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
 mod alloc {
+
     use super::*;
     use alloc::{
         string::{String, ToString},
-        vec::Vec,
+        collections::VecDeque,
     };
 
     extern crate alloc;
 
-    /// Unbounded history backed by [`Vec<String>`]
-    pub struct UnboundedHistory {
-        buffer: Vec<String>,
+    pub struct AllocHistory {
+        pub(crate) buffer: VecDeque<String>,
+        max_entries: usize,
     }
 
-    impl UnboundedHistory {
-        pub fn new() -> Self {
-            Self { buffer: Vec::new() }
+    impl AllocHistory {
+        pub fn new(max_size: usize) -> Self {
+            Self {
+                buffer: VecDeque::new(),
+                max_entries: max_size,
+            }
         }
     }
 
-    impl Default for UnboundedHistory {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    impl History for UnboundedHistory {
+    impl History for AllocHistory {
         fn get_entry(&self, index: usize) -> Option<CircularSlice<'_>> {
             let s = self.buffer[index].as_str();
 
@@ -414,10 +412,11 @@ mod alloc {
         }
 
         fn add_entry<'a>(&mut self, entry: &'a str) -> Result<(), &'a str> {
-            self.buffer.push(entry.to_string());
+            self.buffer.push_back(entry.to_string());
 
-            #[cfg(test)]
-            dbg!(entry);
+            if self.buffer.len() > self.max_entries {
+                self.buffer.pop_front();
+            }
 
             Ok(())
         }
@@ -429,7 +428,7 @@ mod alloc {
 }
 
 #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
-pub use alloc::UnboundedHistory;
+pub use alloc::AllocHistory;
 
 #[cfg(test)]
 mod tests {
@@ -583,8 +582,25 @@ mod tests {
     }
 
     #[test]
+    fn alloc_history() {
+        let mut history = AllocHistory::new(3);
+
+        history.add_entry("0").unwrap();
+        history.add_entry("1").unwrap();
+        history.add_entry("2").unwrap();
+
+        assert_eq!(history.buffer,
+                   vec!["0", "1", "2"]);
+
+        history.add_entry("3").unwrap();
+
+        assert_eq!(history.buffer,
+                   vec!["1", "2", "3"]);
+    }
+
+    #[test]
     fn navigator() {
-        let mut history = UnboundedHistory::new();
+        let mut history = AllocHistory::new(10);
         let mut navigator = HistoryNavigator::new(&mut history);
 
         assert!(navigator.move_up().is_err());

@@ -331,7 +331,7 @@ pub mod tests {
                     thread::spawn(move || {
                         let mut io = MockIO::new(stdin, stdout);
                         let mut editor = EditorBuilder::new_unbounded()
-                            .with_unbounded_history()
+                            .with_alloc_history(10)
                             .build_sync(&mut io)
                             .unwrap();
 

@@ -11,7 +11,7 @@ use crate::{
 };
 
 #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
-use crate::{history::UnboundedHistory, line_buffer::UnboundedBuffer};
+use crate::{history::AllocHistory, line_buffer::UnboundedBuffer};
 
 /// Builder for [`sync_editor::Editor`] and [`async_editor::Editor`].
 ///
@@ -94,10 +94,10 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
 
     #[cfg(any(test, feature = "alloc", feature = "std"))]
     /// Add unbounded history
-    pub fn with_unbounded_history(self) -> EditorBuilder<B, UnboundedHistory> {
+    pub fn with_alloc_history(self, max_entries: usize) -> EditorBuilder<B, AllocHistory> {
         EditorBuilder {
             line_buffer: self.line_buffer,
-            history: UnboundedHistory::new(),
+            history: AllocHistory::new(max_entries),
             _marker: PhantomData,
         }
     }
