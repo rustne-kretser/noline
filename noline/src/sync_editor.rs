@@ -37,6 +37,36 @@ where
     }
 }
 
+fn init_terminal<IO: Read + Write>(io: &mut IO) -> Result<Terminal, NolineError> {
+    let mut initializer = Initializer::new();
+
+    io.write(Initializer::init())?;
+
+    io.flush()?;
+
+    let terminal = loop {
+        let mut buf = [0u8; 1];
+
+        match io.read_exact(&mut buf) {
+            Ok(_) => (),
+            Err(err) => match err {
+                ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
+                ReadExactError::Other(err) => Err(err)?,
+            },
+        }
+
+        match initializer.advance(buf[0]) {
+            InitializerResult::Continue => (),
+            InitializerResult::Item(terminal) => break terminal,
+            InitializerResult::InvalidInput => {
+                return Err(NolineError::ParserError);
+            }
+        }
+    };
+
+    Ok(terminal)
+}
+
 impl<B, H> Editor<B, H>
 where
     B: Buffer,
@@ -48,37 +78,17 @@ where
         history: H,
         io: &mut IO,
     ) -> Result<Self, NolineError> {
-        let mut initializer = Initializer::new();
-
-        io.write(Initializer::init())?;
-
-        io.flush()?;
-
-        let terminal = loop {
-            let mut buf = [0u8; 1];
-
-            match io.read_exact(&mut buf) {
-                Ok(_) => (),
-                Err(err) => match err {
-                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
-                    ReadExactError::Other(err) => Err(err)?,
-                },
-            }
-
-            match initializer.advance(buf[0]) {
-                InitializerResult::Continue => (),
-                InitializerResult::Item(terminal) => break terminal,
-                InitializerResult::InvalidInput => {
-                    return Err(NolineError::ParserError);
-                }
-            }
-        };
-
+        let terminal = init_terminal(io)?;
         Ok(Self {
             buffer,
             terminal,
             history,
         })
+    }
+
+    pub fn reinit<IO: Read + Write>(&mut self, io: &mut IO) -> Result<(), NolineError> {
+        self.terminal = init_terminal(io)?;
+        Ok(())
     }
 
     fn handle_output<'a, 'item, IO, I>(

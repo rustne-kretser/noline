@@ -22,6 +22,37 @@ pub struct Editor<B: Buffer, H: History> {
     history: H,
 }
 
+async fn init_terminal<IO: embedded_io_async::Read + embedded_io_async::Write>(
+    io: &mut IO,
+) -> Result<Terminal, NolineError> {
+    let mut initializer = Initializer::new();
+
+    io.write(Initializer::init()).await?;
+
+    io.flush().await?;
+
+    let terminal = loop {
+        let mut buf = [0u8; 1];
+        // let len = io.read_exact(&mut buf).await?;
+
+        match io.read_exact(&mut buf).await {
+            Ok(_) => (),
+            Err(err) => match err {
+                ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
+                ReadExactError::Other(err) => Err(err)?,
+            },
+        }
+
+        match initializer.advance(buf[0]) {
+            InitializerResult::Continue => (),
+            InitializerResult::Item(terminal) => break terminal,
+            InitializerResult::InvalidInput => return Err(NolineError::ParserError),
+        }
+    };
+
+    Ok(terminal)
+}
+
 impl<B, H> Editor<B, H>
 where
     B: Buffer,
@@ -33,36 +64,20 @@ where
         history: H,
         io: &mut IO,
     ) -> Result<Self, NolineError> {
-        let mut initializer = Initializer::new();
-
-        io.write(Initializer::init()).await?;
-
-        io.flush().await?;
-
-        let terminal = loop {
-            let mut buf = [0u8; 1];
-            // let len = io.read_exact(&mut buf).await?;
-
-            match io.read_exact(&mut buf).await {
-                Ok(_) => (),
-                Err(err) => match err {
-                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
-                    ReadExactError::Other(err) => Err(err)?,
-                },
-            }
-
-            match initializer.advance(buf[0]) {
-                InitializerResult::Continue => (),
-                InitializerResult::Item(terminal) => break terminal,
-                InitializerResult::InvalidInput => return Err(NolineError::ParserError),
-            }
-        };
-
+        let terminal = init_terminal(io).await?;
         Ok(Self {
             buffer,
             terminal,
             history,
         })
+    }
+
+    pub async fn reinit<IO: embedded_io_async::Read + embedded_io_async::Write>(
+        &mut self,
+        io: &mut IO,
+    ) -> Result<(), NolineError> {
+        self.terminal = init_terminal(io).await?;
+        Ok(())
     }
 
     async fn handle_output<'b, 'item, IO, I>(
