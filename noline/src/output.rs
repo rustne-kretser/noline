@@ -1,4 +1,4 @@
-use core::array::IntoIter;
+use core::marker::PhantomData;
 
 use crate::{
     core::Prompt,
@@ -365,13 +365,37 @@ where
 
 use Step::*;
 
-enum OutputState<'a, I> {
-    New(OutputAction),
-    OneStep(IntoIter<Step<'a, I>, 1>),
-    TwoSteps(IntoIter<Step<'a, I>, 2>),
-    ThreeSteps(IntoIter<Step<'a, I>, 3>),
-    FourSteps(IntoIter<Step<'a, I>, 4>),
-    Done,
+pub struct OutputIter<'a, 'item, I> {
+    terminal: &'a mut Terminal,
+    steps: [Option<Step<'a, I>>; 4],
+    pos: usize,
+    _marker: PhantomData<&'item ()>,
+}
+
+impl<'a, 'item, I> Iterator for OutputIter<'a, 'item, I>
+where
+    I: Iterator<Item = &'item str>,
+    'item: 'a,
+{
+    type Item = OutputItem<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(step) = self.steps.get_mut(self.pos) {
+                if let Some(step) = step.as_mut() {
+                    if let Some(item) = step.advance(self.terminal) {
+                        break Some(item);
+                    } else {
+                        self.pos += 1;
+                    }
+                } else {
+                    break None;
+                }
+            } else {
+                break None;
+            }
+        }
+    }
 }
 
 fn byte_position(s: &str, char_pos: usize) -> usize {
@@ -386,7 +410,7 @@ pub struct Output<'a, B: Buffer, I> {
     prompt: &'a Prompt<I>,
     buffer: &'a LineBuffer<B>,
     terminal: &'a mut Terminal,
-    state: OutputState<'a, I>,
+    action: OutputAction,
 }
 
 impl<'a, 'item, B, I> Output<'a, B, I>
@@ -404,7 +428,7 @@ where
             prompt,
             buffer,
             terminal,
-            state: OutputState::New(action),
+            action,
         }
     }
 
@@ -445,223 +469,138 @@ where
 
     #[cfg(test)]
     pub fn into_vec(self) -> Vec<u8> {
-        self.flat_map(|item| item.get_bytes().unwrap().to_vec())
+        self.into_iter()
+            .flat_map(|item| item.get_bytes().unwrap().to_vec())
             .collect::<Vec<u8>>()
     }
 }
 
-impl<'a, 'item, B, I> Iterator for Output<'a, B, I>
+impl<'a, 'item, B, I> IntoIterator for Output<'a, B, I>
 where
     B: Buffer,
     I: Iterator<Item = &'item str> + Clone,
     'item: 'a,
 {
     type Item = OutputItem<'a>;
+    type IntoIter = OutputIter<'a, 'item, I>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        fn advance_steps<'a, 'item, I, const N: usize>(
-            steps: &mut IntoIter<Step<'a, I>, N>,
-            terminal: &mut Terminal,
-        ) -> Option<OutputItem<'a>>
-        where
-            I: Iterator<Item = &'item str>,
-            'item: 'a,
-        {
-            loop {
-                if let Some((step, _)) = steps.as_mut_slice().split_first_mut() {
-                    // #[cfg(test)]
-                    // dbg!(&step);
-
-                    if let Some(bytes) = step.advance(terminal) {
-                        break Some(bytes);
-                    } else {
-                        steps.next();
-                    }
-                } else {
-                    break None;
-                }
+    fn into_iter(self) -> Self::IntoIter {
+        fn pack<T, const IN: usize, const OUT: usize>(array: [T; IN]) -> [Option<T>; OUT] {
+            const {
+                assert!(IN <= OUT);
             }
+
+            let mut steps = [(); OUT].map(|()| None);
+
+            for (i, step) in array.into_iter().enumerate() {
+                steps[i] = Some(step);
+            }
+
+            steps
         }
 
-        loop {
-            // #[cfg(test)]
-            // dbg!(&self.state);
+        let steps = match self.action {
+            OutputAction::MoveCursor(cursor_move) => {
+                let position = self.new_position(cursor_move);
 
-            match self.state {
-                OutputState::New(action) => {
-                    self.state = match action {
-                        OutputAction::MoveCursor(cursor_move) => {
-                            let position = self.new_position(cursor_move);
+                let offset =
+                    self.terminal.offset_from_position(position) - self.prompt.len() as isize;
+                let buffer_len = self.buffer.as_str().chars().count() as isize;
 
-                            let offset = self.terminal.offset_from_position(position)
-                                - self.prompt.len() as isize;
-                            let buffer_len = self.buffer.as_str().chars().count() as isize;
-
-                            if offset >= 0 && offset <= buffer_len {
-                                OutputState::OneStep(
-                                    [Move(MoveCursorToPosition::new(
-                                        self.new_position(cursor_move),
-                                    ))]
-                                    .into_iter(),
-                                )
-                            } else {
-                                OutputState::OneStep([Bell].into_iter())
-                            }
-                        }
-                        OutputAction::PrintBufferAndMoveCursorForward => OutputState::TwoSteps(
-                            [
-                                Print(Printable::from_str(
-                                    self.buffer_after_position(self.terminal.get_position()),
-                                )),
-                                Move(MoveCursorToPosition::new(
-                                    self.terminal.relative_position(1),
-                                )),
-                            ]
-                            .into_iter(),
-                        ),
-                        OutputAction::EraseAfterCursor => OutputState::OneStep([Erase].into_iter()),
-                        OutputAction::EraseAndPrintBuffer => {
-                            let position = self.terminal.get_position();
-
-                            OutputState::ThreeSteps(
-                                [
-                                    Erase,
-                                    Print(Printable::from_str(
-                                        self.buffer_after_position(position),
-                                    )),
-                                    Move(MoveCursorToPosition::new(position)),
-                                ]
-                                .into_iter(),
-                            )
-                        }
-
-                        OutputAction::ClearScreen => {
-                            let rows = self.terminal.scroll_to_top();
-                            self.terminal.move_cursor(Position::new(0, 0));
-
-                            OutputState::ThreeSteps(
-                                [
-                                    Move(MoveCursorToPosition::Move(MoveCursor::new(
-                                        Cursor::new(0, 0),
-                                        rows,
-                                    ))),
-                                    Erase,
-                                    Print(Printable::from_iter(self.prompt.iter())),
-                                ]
-                                .into_iter(),
-                            )
-                        }
-                        OutputAction::ClearLine => OutputState::TwoSteps(
-                            [
-                                Move(MoveCursorToPosition::new(
-                                    self.new_position(CursorMove::Start),
-                                )),
-                                Erase,
-                            ]
-                            .into_iter(),
-                        ),
-                        OutputAction::MoveCursorBackAndPrintBufferAndMoveForward => {
-                            let position = self.terminal.relative_position(-1);
-
-                            OutputState::ThreeSteps(
-                                [
-                                    Move(MoveCursorToPosition::new(position)),
-                                    Print(Printable::from_str(
-                                        self.buffer_after_position(position),
-                                    )),
-                                    Move(MoveCursorToPosition::new(self.terminal.get_position())),
-                                ]
-                                .into_iter(),
-                            )
-                        }
-                        OutputAction::MoveCursorAndEraseAndPrintBuffer(steps) => {
-                            let position = self.terminal.relative_position(steps);
-
-                            OutputState::FourSteps(
-                                [
-                                    Move(MoveCursorToPosition::new(position)),
-                                    Erase,
-                                    Print(Printable::from_str(
-                                        self.buffer_after_position(position),
-                                    )),
-                                    Move(MoveCursorToPosition::new(position)),
-                                ]
-                                .into_iter(),
-                            )
-                        }
-                        OutputAction::RingBell => OutputState::OneStep([Bell].into_iter()),
-                        OutputAction::ClearAndPrintPrompt => OutputState::ThreeSteps(
-                            [
-                                ClearLine,
-                                Print(Printable::from_iter(self.prompt.iter())),
-                                GetPosition,
-                            ]
-                            .into_iter(),
-                        ),
-                        OutputAction::ClearAndPrintBuffer => {
-                            let position = self.new_position(CursorMove::Start);
-
-                            OutputState::ThreeSteps(
-                                [
-                                    Move(MoveCursorToPosition::new(position)),
-                                    Erase,
-                                    Print(Printable::from_str(self.buffer.as_str())),
-                                ]
-                                .into_iter(),
-                            )
-                        }
-                        OutputAction::ProbeSize => OutputState::FourSteps(
-                            [
-                                SavePosition,
-                                MoveCursorToEdge,
-                                GetPosition,
-                                RestorePosition,
-                            ]
-                            .into_iter(),
-                        ),
-                        OutputAction::Done => {
-                            OutputState::TwoSteps([Newline, EndOfString].into_iter())
-                        }
-                        OutputAction::Abort => OutputState::TwoSteps([Newline, Abort].into_iter()),
-                        OutputAction::Nothing => OutputState::Done,
-                    };
-
-                    continue;
+                if offset >= 0 && offset <= buffer_len {
+                    pack([Move(MoveCursorToPosition::new(
+                        self.new_position(cursor_move),
+                    ))])
+                } else {
+                    pack([Bell])
                 }
-                OutputState::OneStep(ref mut steps) => {
-                    if let Some(bytes) = advance_steps(steps, self.terminal) {
-                        break Some(bytes);
-                    } else {
-                        self.state = OutputState::Done;
-                        continue;
-                    }
-                }
-                OutputState::TwoSteps(ref mut steps) => {
-                    if let Some(bytes) = advance_steps(steps, self.terminal) {
-                        break Some(bytes);
-                    } else {
-                        self.state = OutputState::Done;
-                        continue;
-                    }
-                }
-                OutputState::ThreeSteps(ref mut steps) => {
-                    if let Some(bytes) = advance_steps(steps, self.terminal) {
-                        break Some(bytes);
-                    } else {
-                        self.state = OutputState::Done;
-                        continue;
-                    }
-                }
-                OutputState::FourSteps(ref mut steps) => {
-                    if let Some(bytes) = advance_steps(steps, self.terminal) {
-                        break Some(bytes);
-                    } else {
-                        self.state = OutputState::Done;
-                        continue;
-                    }
-                }
-                OutputState::Done => break None,
             }
+            OutputAction::PrintBufferAndMoveCursorForward => pack([
+                Print(Printable::from_str(
+                    self.buffer_after_position(self.terminal.get_position()),
+                )),
+                Move(MoveCursorToPosition::new(
+                    self.terminal.relative_position(1),
+                )),
+            ]),
+            OutputAction::EraseAfterCursor => pack([Erase]),
+            OutputAction::EraseAndPrintBuffer => {
+                let position = self.terminal.get_position();
+
+                pack([
+                    Erase,
+                    Print(Printable::from_str(self.buffer_after_position(position))),
+                    Move(MoveCursorToPosition::new(position)),
+                ])
+            }
+
+            OutputAction::ClearScreen => {
+                let rows = self.terminal.scroll_to_top();
+                self.terminal.move_cursor(Position::new(0, 0));
+
+                pack([
+                    Move(MoveCursorToPosition::Move(MoveCursor::new(
+                        Cursor::new(0, 0),
+                        rows,
+                    ))),
+                    Erase,
+                    Print(Printable::from_iter(self.prompt.iter())),
+                ])
+            }
+            OutputAction::ClearLine => pack([
+                Move(MoveCursorToPosition::new(
+                    self.new_position(CursorMove::Start),
+                )),
+                Erase,
+            ]),
+            OutputAction::MoveCursorBackAndPrintBufferAndMoveForward => {
+                let position = self.terminal.relative_position(-1);
+
+                pack([
+                    Move(MoveCursorToPosition::new(position)),
+                    Print(Printable::from_str(self.buffer_after_position(position))),
+                    Move(MoveCursorToPosition::new(self.terminal.get_position())),
+                ])
+            }
+            OutputAction::MoveCursorAndEraseAndPrintBuffer(steps) => {
+                let position = self.terminal.relative_position(steps);
+
+                pack([
+                    Move(MoveCursorToPosition::new(position)),
+                    Erase,
+                    Print(Printable::from_str(self.buffer_after_position(position))),
+                    Move(MoveCursorToPosition::new(position)),
+                ])
+            }
+            OutputAction::RingBell => pack([Bell]),
+            OutputAction::ClearAndPrintPrompt => pack([
+                ClearLine,
+                Print(Printable::from_iter(self.prompt.iter())),
+                GetPosition,
+            ]),
+            OutputAction::ClearAndPrintBuffer => {
+                let position = self.new_position(CursorMove::Start);
+
+                pack([
+                    Move(MoveCursorToPosition::new(position)),
+                    Erase,
+                    Print(Printable::from_str(self.buffer.as_str())),
+                ])
+            }
+            OutputAction::ProbeSize => {
+                pack([SavePosition, MoveCursorToEdge, GetPosition, RestorePosition])
+            }
+
+            OutputAction::Done => pack([Newline, EndOfString]),
+            OutputAction::Abort => pack([Newline, Abort]),
+            OutputAction::Nothing => pack([]),
+        };
+
+        OutputIter {
+            terminal: self.terminal,
+            steps,
+            pos: 0,
+            _marker: PhantomData,
         }
     }
 }
@@ -807,6 +746,7 @@ mod tests {
         fn to_string<B: Buffer>(output: Output<'_, B, StrIter>) -> String {
             String::from_utf8(
                 output
+                    .into_iter()
                     .flat_map(|item| {
                         if let Some(bytes) = item.get_bytes() {
                             bytes.to_vec()
