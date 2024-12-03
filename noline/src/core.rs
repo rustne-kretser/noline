@@ -408,6 +408,7 @@ pub(crate) mod tests {
 
             let mut reset_start: Vec<u8> = reset
                 .start()
+                .into_iter()
                 .filter_map(|item| item.get_bytes().map(|bytes| bytes.to_vec()))
                 .flatten()
                 .collect();
@@ -425,6 +426,7 @@ pub(crate) mod tests {
                     .filter_map(|b| {
                         reset.advance(b).map(|output| {
                             output
+                                .into_iter()
                                 .map(|item| item.get_bytes().map(|bytes| bytes.to_vec()))
                                 .collect::<Vec<_>>()
                         })
@@ -501,6 +503,7 @@ pub(crate) mod tests {
 
         let probe = reset
             .start()
+            .into_iter()
             .flat_map(|item| item.get_bytes().unwrap().to_vec())
             .collect::<Vec<u8>>();
 
