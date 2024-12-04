@@ -13,68 +13,61 @@ use crate::terminal::{Cursor, Terminal};
 
 use OutputAction::*;
 
-pub enum InitializerResult<T> {
-    Continue,
-    Item(T),
-    InvalidInput,
-}
-
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-pub(crate) enum InitializerState {
+enum ResetState {
     New,
-    Position(Cursor),
+    GetSize,
+    GetPosition,
     Done,
 }
 
-// Terminal initializer used to probe terminal size. To use, print
-// bytes return [`Initializer::init()'] to output and read bytes into
-// [`initializer::advance()`] until it ruturns item.
-pub struct Initializer {
-    pub(crate) state: InitializerState,
-    parser: Parser,
+pub struct ResetHandle<'line, 'a, B: Buffer, H: History, I> {
+    line: &'line mut Line<'a, B, H, I>,
+    state: ResetState,
 }
 
-impl Initializer {
-    pub fn new() -> Self {
+impl<'line, 'a, 'item, 'output, B, H, I> ResetHandle<'line, 'a, B, H, I>
+where
+    I: Iterator<Item = &'item str> + Clone + 'a,
+    B: Buffer,
+    H: History,
+    'item: 'output,
+{
+    fn new(line: &'line mut Line<'a, B, H, I>) -> Self {
         Self {
-            state: InitializerState::New,
-            parser: Parser::new(),
+            line,
+            state: ResetState::New,
         }
     }
 
-    // Returns initialization bytes.
-    pub fn init() -> &'static [u8] {
-        // There is no command to request the size of the terminal window,
-        // so to probe the size we move the cursor way out of the screen
-        // and then request the position, because the cursor must be in
-        // the screen this gives us the size.
-        b"\r\x1b[J\x1b7\x1b[6n\x1b[999;999H\x1b[6n\x1b8"
+    pub fn start(&mut self) -> Output<'_, B, I> {
+        assert!(matches!(self.state, ResetState::New));
+        self.state = ResetState::GetSize;
+
+        self.line.generate_output(ProbeSize)
     }
 
-    // Advance initializer by one byte
-    pub fn advance(&mut self, byte: u8) -> InitializerResult<Terminal> {
-        let action = self.parser.advance(byte);
-
-        #[cfg(test)]
-        dbg!(byte, action, &self.state);
+    pub fn advance(&mut self, byte: u8) -> Option<Output<'_, B, I>> {
+        let action = self.line.parser.advance(byte);
 
         match action {
             Action::ControlSequenceIntroducer(CSI::CPR(x, y)) => match self.state {
-                InitializerState::New => {
-                    self.state = InitializerState::Position(Cursor::new(x - 1, y - 1));
-                    InitializerResult::Continue
+                ResetState::New => panic!("Invalid state"),
+                ResetState::GetSize => {
+                    self.line.terminal.resize(x, y);
+                    self.state = ResetState::GetPosition;
+                    Some(self.line.generate_output(ClearAndPrintPrompt))
                 }
-                InitializerState::Position(pos) => {
+                ResetState::GetPosition => {
                     #[cfg(test)]
-                    dbg!(pos, x, y);
-
-                    self.state = InitializerState::Done;
-                    InitializerResult::Item(Terminal::new(x, y, pos))
+                    dbg!(x, y);
+                    self.line.terminal.reset(Cursor::new(x - 1, y - 1));
+                    self.state = ResetState::Done;
+                    None
                 }
-                InitializerState::Done => InitializerResult::InvalidInput,
+                ResetState::Done => panic!("Invalid state"),
             },
-            Action::Ignore => InitializerResult::Continue,
-            _ => InitializerResult::InvalidInput,
+            Action::Ignore => Some(self.line.generate_output(Nothing)),
+            _ => None,
         }
     }
 }
@@ -177,9 +170,9 @@ where
     }
 
     // Truncate buffer, clear line and print prompt
-    pub fn reset(&mut self) -> Output<'_, B, I> {
+    pub fn reset(&mut self) -> ResetHandle<'_, 'a, B, H, I> {
         self.buffer.truncate();
-        self.generate_output(ClearAndPrintPrompt)
+        ResetHandle::new(self)
     }
 
     fn generate_output(&mut self, action: OutputAction) -> Output<'_, B, I> {
@@ -388,22 +381,8 @@ pub(crate) mod tests {
     }
 
     impl<B: Buffer, H: History> Editor<B, H> {
-        fn new(buffer: LineBuffer<B>, history: H, term: &mut MockTerminal) -> Self {
-            let mut initializer = Initializer::new();
-
-            let terminal = Initializer::init()
-                .iter()
-                .map(|&b| term.advance(b))
-                .filter_map(|output| output.map(|x| x.into_iter()))
-                .flatten()
-                .collect::<Vec<u8>>()
-                .into_iter()
-                .find_map(|b| match initializer.advance(b) {
-                    InitializerResult::Continue => None,
-                    InitializerResult::Item(terminal) => Some(terminal),
-                    InitializerResult::InvalidInput => unreachable!(),
-                })
-                .unwrap();
+        fn new(buffer: LineBuffer<B>, history: H) -> Self {
+            let terminal = Terminal::default();
 
             Self {
                 buffer,
@@ -425,18 +404,36 @@ pub(crate) mod tests {
                 &mut self.history,
             );
 
-            let output: Vec<u8> = line
-                .reset()
+            let mut reset = line.reset();
+
+            let mut reset_start: Vec<u8> = reset
+                .start()
                 .filter_map(|item| item.get_bytes().map(|bytes| bytes.to_vec()))
-                .flatten()
-                .filter_map(|b| mockterm.advance(b))
                 .flatten()
                 .collect();
 
-            output.into_iter().for_each(|b| {
-                line.advance(b)
-                    .for_each(|output| assert!(output.get_bytes().is_none()))
-            });
+            while !reset_start.is_empty() {
+                let term_response: Vec<u8> = reset_start
+                    .into_iter()
+                    .filter_map(|b| mockterm.advance(b))
+                    .flat_map(|output| output.into_iter())
+                    .collect();
+
+                reset_start = term_response
+                    .iter()
+                    .copied()
+                    .filter_map(|b| {
+                        reset.advance(b).map(|output| {
+                            output
+                                .map(|item| item.get_bytes().map(|bytes| bytes.to_vec()))
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .flatten()
+                    .flatten()
+                    .flatten()
+                    .collect();
+            }
 
             assert_eq!(mockterm.current_line_as_string(), prompt);
             assert_eq!(mockterm.get_cursor(), Cursor::new(cursor.row, prompt.len()));
@@ -478,13 +475,77 @@ pub(crate) mod tests {
         columns: usize,
         origin: Cursor,
     ) -> (MockTerminal, Editor<UnboundedBuffer, NoHistory>) {
-        let mut terminal = MockTerminal::new(rows, columns, origin);
+        let terminal = MockTerminal::new(rows, columns, origin);
 
-        let editor = Editor::new(LineBuffer::new_unbounded(), NoHistory {}, &mut terminal);
+        let editor = Editor::new(LineBuffer::new_unbounded(), NoHistory {});
 
         assert_eq!(terminal.get_cursor(), origin);
 
         (terminal, editor)
+    }
+
+    #[test]
+    fn reset() {
+        let prompt = "> ";
+        let (terminal, mut editor) = get_terminal_and_editor(4, 10, Cursor::new(1, 0));
+        let mut line = Line::new(
+            prompt,
+            &mut editor.buffer,
+            &mut editor.terminal,
+            &mut editor.history,
+        );
+
+        dbg!(terminal.get_cursor());
+
+        let mut reset = line.reset();
+
+        let probe = reset
+            .start()
+            .flat_map(|item| item.get_bytes().unwrap().to_vec())
+            .collect::<Vec<u8>>();
+
+        assert_eq!(probe, b"\x1b7\x1b[999;999H\x1b[6n\x1b8");
+
+        let output = b"\x1b[91;45R"
+            .iter()
+            .copied()
+            .flat_map(|b| reset.advance(b).unwrap().into_vec())
+            .collect::<Vec<_>>();
+
+        dbg!(terminal.get_cursor());
+
+        assert_eq!(output, b"\r\x1b[J> \x1b[6n");
+
+        let output = b"\x1b[2;3R"
+            .iter()
+            .copied()
+            .flat_map(|b| {
+                if let Some(output) = reset.advance(b) {
+                    output.into_vec()
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        dbg!(terminal.get_cursor());
+
+        assert_eq!(output, b"");
+
+        assert_eq!(line.terminal.get_size(), (91, 45));
+    }
+
+    #[test]
+    fn mock_editor() {
+        let prompt = "> ";
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 20, Cursor::new(1, 0));
+
+        assert_eq!(terminal.get_cursor(), Cursor::new(1, 0));
+
+        let line = editor.get_line(prompt, &mut terminal);
+
+        dbg!(&line.terminal);
+        assert_eq!(terminal.get_cursor(), line.terminal.get_cursor());
     }
 
     #[test]
@@ -542,6 +603,11 @@ pub(crate) mod tests {
         let (mut terminal, mut editor) = get_terminal_and_editor(4, 20, Cursor::new(1, 0));
 
         let mut line = editor.get_line(prompt, &mut terminal);
+
+        dbg!(terminal.get_cursor());
+        dbg!(&line.terminal);
+        assert_eq!(terminal.get_cursor(), Cursor::new(1, 2));
+        dbg!(terminal.screen_as_string());
 
         advance(&mut terminal, &mut line, "Hello, World!").unwrap();
         assert_eq!(terminal.get_cursor(), Cursor::new(1, 15));
@@ -772,11 +838,8 @@ pub(crate) mod tests {
     fn slice_buffer() {
         let mut array = [0; 20];
         let mut terminal = MockTerminal::new(20, 80, Cursor::new(0, 0));
-        let mut editor: Editor<_, NoHistory> = Editor::new(
-            LineBuffer::from_slice(&mut array),
-            NoHistory {},
-            &mut terminal,
-        );
+        let mut editor: Editor<_, NoHistory> =
+            Editor::new(LineBuffer::from_slice(&mut array), NoHistory {});
 
         let mut line = editor.get_line("> ", &mut terminal);
 
@@ -795,8 +858,7 @@ pub(crate) mod tests {
     fn history() {
         fn test<H: History>(history: H) {
             let mut terminal = MockTerminal::new(20, 80, Cursor::new(0, 0));
-            let mut editor: Editor<_, H> =
-                Editor::new(LineBuffer::new_unbounded(), history, &mut terminal);
+            let mut editor: Editor<_, H> = Editor::new(LineBuffer::new_unbounded(), history);
 
             let mut line = editor.get_line("> ", &mut terminal);
 

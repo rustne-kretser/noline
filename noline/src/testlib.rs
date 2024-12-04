@@ -1,3 +1,4 @@
+use core::time::Duration;
 use std::string::String;
 use std::thread;
 use std::thread::JoinHandle;
@@ -24,8 +25,8 @@ pub struct MockTerminal {
     parser: Parser,
     screen: Vec<Vec<char>>,
     pub cursor: Cursor,
-    rows: usize,
-    columns: usize,
+    pub rows: usize,
+    pub columns: usize,
     saved_cursor: Option<Cursor>,
     pub bell: bool,
     pub terminal_tx: Option<Sender<u8>>,
@@ -256,6 +257,7 @@ pub trait ToByteVec {
     fn to_byte_vec(self) -> Vec<u8>;
 }
 
+#[derive(Debug)]
 pub struct TestCase {
     pub input: Vec<Vec<u8>>,
     pub output: Vec<String>,
@@ -372,6 +374,9 @@ pub fn test_editor_with_case<IO: Send + 'static>(
             string_rx.recv().unwrap()
         })
         .collect();
+
+    // Added delay to prevent race with terminal reset
+    std::thread::sleep(Duration::from_millis(100));
 
     keyboard_tx.send(0x3).unwrap();
 

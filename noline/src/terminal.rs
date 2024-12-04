@@ -42,6 +42,12 @@ pub struct Terminal {
     row_offset: isize,
 }
 
+impl Default for Terminal {
+    fn default() -> Self {
+        Self::new(24, 80, Cursor::new(0, 0))
+    }
+}
+
 impl Terminal {
     pub fn new(rows: usize, columns: usize, cursor: Cursor) -> Self {
         let row_offset = -(cursor.row as isize);
@@ -52,6 +58,11 @@ impl Terminal {
             cursor,
             row_offset,
         }
+    }
+
+    pub fn resize(&mut self, rows: usize, columns: usize) {
+        self.rows = rows;
+        self.columns = columns;
     }
 
     pub fn reset(&mut self, cursor: Cursor) {
@@ -147,6 +158,11 @@ impl Terminal {
 
     pub fn columns_remaining(&self) -> usize {
         self.columns - self.cursor.column
+    }
+
+    #[cfg(test)]
+    pub fn get_size(&self) -> (usize, usize) {
+        (self.rows, self.columns)
     }
 }
 

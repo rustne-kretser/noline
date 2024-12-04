@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Removed initializer. Probe terminal size before prompt for every line.
+
 ## [0.5.0 - 2024-08-30]
 
 - Bugfix: Char boundary string splitting error
