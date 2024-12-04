@@ -5,7 +5,7 @@
 use embedded_io_async::ReadExactError;
 
 use crate::{
-    core::{Initializer, InitializerResult, Line, Prompt},
+    core::{Line, Prompt},
     error::NolineError,
     history::{get_history_entries, CircularSlice, History},
     line_buffer::{Buffer, LineBuffer},
@@ -31,32 +31,9 @@ where
     pub async fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
         buffer: LineBuffer<B>,
         history: H,
-        io: &mut IO,
+        _io: &mut IO,
     ) -> Result<Self, NolineError> {
-        let mut initializer = Initializer::new();
-
-        io.write(Initializer::init()).await?;
-
-        io.flush().await?;
-
-        let terminal = loop {
-            let mut buf = [0u8; 1];
-            // let len = io.read_exact(&mut buf).await?;
-
-            match io.read_exact(&mut buf).await {
-                Ok(_) => (),
-                Err(err) => match err {
-                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
-                    ReadExactError::Other(err) => Err(err)?,
-                },
-            }
-
-            match initializer.advance(buf[0]) {
-                InitializerResult::Continue => (),
-                InitializerResult::Item(terminal) => break terminal,
-                InitializerResult::InvalidInput => return Err(NolineError::ParserError),
-            }
-        };
+        let terminal = Terminal::default();
 
         Ok(Self {
             buffer,
@@ -90,6 +67,21 @@ where
         Ok(None)
     }
 
+    async fn read_byte<IO>(io: &mut IO) -> Result<u8, NolineError>
+    where
+        IO: embedded_io_async::Read + embedded_io_async::Write,
+    {
+        let mut buf = [0x8; 1];
+
+        match io.read_exact(&mut buf).await {
+            Ok(_) => Ok(buf[0]),
+            Err(err) => match err {
+                ReadExactError::UnexpectedEof => Err(NolineError::Aborted),
+                ReadExactError::Other(err) => Err(err)?,
+            },
+        }
+    }
+
     /// Read line from `stdin`
     pub async fn readline<'b, 'item, IO, I>(
         &'b mut self,
@@ -106,24 +98,26 @@ where
             &mut self.terminal,
             &mut self.history,
         );
-        Self::handle_output(line.reset(), io).await?;
+
+        let mut reset = line.reset();
+
+        Self::handle_output(reset.start(), io).await?;
 
         loop {
-            let mut buf = [0x8; 1];
+            let byte = Self::read_byte(io).await?;
 
-            match io.read_exact(&mut buf).await {
-                Ok(_) => {
-                    if Self::handle_output(line.advance(buf[0]), io)
-                        .await?
-                        .is_some()
-                    {
-                        break;
-                    }
-                }
-                Err(err) => match err {
-                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
-                    ReadExactError::Other(err) => Err(err)?,
-                },
+            if let Some(output) = reset.advance(byte) {
+                Self::handle_output(output, io).await?;
+            } else {
+                break;
+            }
+        }
+
+        loop {
+            let byte = Self::read_byte(io).await?;
+
+            if Self::handle_output(line.advance(byte), io).await?.is_some() {
+                break;
             }
         }
 

@@ -11,7 +11,7 @@ use crate::error::NolineError;
 use crate::history::{get_history_entries, CircularSlice, History};
 use crate::line_buffer::{Buffer, LineBuffer};
 
-use crate::core::{Initializer, InitializerResult, Line, Prompt};
+use crate::core::{Line, Prompt};
 use crate::output::{Output, OutputItem};
 use crate::terminal::Terminal;
 
@@ -46,33 +46,9 @@ where
     pub fn new<IO: Read + Write>(
         buffer: LineBuffer<B>,
         history: H,
-        io: &mut IO,
+        _io: &mut IO,
     ) -> Result<Self, NolineError> {
-        let mut initializer = Initializer::new();
-
-        io.write(Initializer::init())?;
-
-        io.flush()?;
-
-        let terminal = loop {
-            let mut buf = [0u8; 1];
-
-            match io.read_exact(&mut buf) {
-                Ok(_) => (),
-                Err(err) => match err {
-                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
-                    ReadExactError::Other(err) => Err(err)?,
-                },
-            }
-
-            match initializer.advance(buf[0]) {
-                InitializerResult::Continue => (),
-                InitializerResult::Item(terminal) => break terminal,
-                InitializerResult::InvalidInput => {
-                    return Err(NolineError::ParserError);
-                }
-            }
-        };
+        let terminal = Terminal::default();
 
         Ok(Self {
             buffer,
@@ -106,6 +82,21 @@ where
         Ok(None)
     }
 
+    fn read_byte<IO>(io: &mut IO) -> Result<u8, NolineError>
+    where
+        IO: Read + Write,
+    {
+        let mut buf = [0x8; 1];
+
+        match io.read_exact(&mut buf) {
+            Ok(_) => Ok(buf[0]),
+            Err(err) => match err {
+                ReadExactError::UnexpectedEof => Err(NolineError::Aborted),
+                ReadExactError::Other(err) => Err(err)?,
+            },
+        }
+    }
+
     /// Read line from `stdin`
     pub fn readline<'a, 'item, IO, I>(
         &'a mut self,
@@ -123,22 +114,25 @@ where
             &mut self.history,
         );
 
-        line.reset();
-        Self::handle_output(line.reset(), io)?;
+        let mut reset = line.reset();
+
+        Self::handle_output(reset.start(), io)?;
 
         loop {
-            let mut buf = [0x8; 1];
+            let byte = Self::read_byte(io)?;
 
-            match io.read_exact(&mut buf) {
-                Ok(_) => {
-                    if Self::handle_output(line.advance(buf[0]), io)?.is_some() {
-                        break;
-                    }
-                }
-                Err(err) => match err {
-                    ReadExactError::UnexpectedEof => return Err(NolineError::Aborted),
-                    ReadExactError::Other(err) => Err(err)?,
-                },
+            if let Some(output) = reset.advance(byte) {
+                Self::handle_output(output, io)?;
+            } else {
+                break;
+            }
+        }
+
+        loop {
+            let byte = Self::read_byte(io)?;
+
+            if Self::handle_output(line.advance(byte), io)?.is_some() {
+                break;
             }
         }
 
@@ -167,7 +161,6 @@ pub mod tests {
     use embedded_io::{Read, Write};
 
     use crate::builder::EditorBuilder;
-    use crate::core::Initializer;
     use crate::testlib::{test_cases, test_editor_with_case, MockTerminal};
 
     struct MockStdout {
@@ -272,24 +265,28 @@ pub mod tests {
             }
         });
 
-        for &b in Initializer::init() {
-            dbg!(b);
-            assert_eq!(
-                output_rx.recv_timeout(::core::time::Duration::from_millis(1000)),
-                Ok(b)
-            );
+        for &b in b"\x1b7\x1b[999;999H\x1b[6n\x1b8" {
+            let received = output_rx
+                .recv_timeout(::core::time::Duration::from_millis(1000))
+                .unwrap();
+            println!("Received {:x}, expected: {:x}", received, b);
+            assert_eq!(received, b);
         }
 
-        for &b in "\x1b[1;1R\x1b[20;80R".as_bytes() {
+        for &b in b"\x1b[20;80R" {
             input_tx.send(b).unwrap();
         }
 
-        for &b in "\r\x1b[J> \x1b[6n".as_bytes() {
-            dbg!(b);
-            assert_eq!(
-                output_rx.recv_timeout(::core::time::Duration::from_millis(1000)),
-                Ok(b)
-            );
+        for &b in b"\r\x1b[J> \x1b[6n" {
+            let received = output_rx
+                .recv_timeout(::core::time::Duration::from_millis(1000))
+                .unwrap();
+            println!("Received {:x}, expected: {:x}", received, b);
+            assert_eq!(received, b);
+        }
+
+        for &b in b"\x1b[1;3R" {
+            input_tx.send(b).unwrap();
         }
 
         for &b in "abc\r".as_bytes() {

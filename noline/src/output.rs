@@ -6,6 +6,7 @@ use crate::{
     terminal::{Cursor, Position, Terminal},
 };
 
+#[cfg_attr(test, derive(Debug))]
 pub enum OutputItem<'a> {
     Slice(&'a [u8]),
     UintToBytes(UintToBytes<4>),
@@ -47,6 +48,7 @@ pub enum OutputAction {
     MoveCursorBackAndPrintBufferAndMoveForward,
     MoveCursorAndEraseAndPrintBuffer(isize),
     RingBell,
+    ProbeSize,
     Done,
     Abort,
 }
@@ -278,7 +280,10 @@ where
 enum Step<'a, I> {
     Print(Printable<'a, I>),
     Move(MoveCursorToPosition),
+    MoveCursorToEdge,
     GetPosition,
+    SavePosition,
+    RestorePosition,
     ClearLine,
     Erase,
     Newline,
@@ -332,6 +337,7 @@ where
                 *self = Step::Done;
                 None
             }
+            MoveCursorToEdge => self.transition(Step::Done, OutputItem::Slice(b"\x1b[999;999H")),
             Erase => self.transition(Step::Done, OutputItem::Slice("\x1b[J".as_bytes())),
             Newline => {
                 let mut position = terminal.get_position();
@@ -350,6 +356,8 @@ where
                 self.transition(Step::Done, OutputItem::Slice("\r\x1b[J".as_bytes()))
             }
             GetPosition => self.transition(Step::Done, OutputItem::Slice("\x1b[6n".as_bytes())),
+            SavePosition => self.transition(Step::Done, OutputItem::Slice(b"\x1b7")),
+            RestorePosition => self.transition(Step::Done, OutputItem::Slice(b"\x1b8")),
             Done => None,
         }
     }
@@ -433,6 +441,12 @@ where
                 self.terminal.relative_position(len - pos)
             }
         }
+    }
+
+    #[cfg(test)]
+    pub fn into_vec(self) -> Vec<u8> {
+        self.flat_map(|item| item.get_bytes().unwrap().to_vec())
+            .collect::<Vec<u8>>()
     }
 }
 
@@ -596,6 +610,15 @@ where
                                 .into_iter(),
                             )
                         }
+                        OutputAction::ProbeSize => OutputState::FourSteps(
+                            [
+                                SavePosition,
+                                MoveCursorToEdge,
+                                GetPosition,
+                                RestorePosition,
+                            ]
+                            .into_iter(),
+                        ),
                         OutputAction::Done => {
                             OutputState::TwoSteps([Newline, EndOfString].into_iter())
                         }
