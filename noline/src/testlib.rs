@@ -152,6 +152,7 @@ impl MockTerminal {
                 CSI::Home => unimplemented!(),
                 CSI::Delete => unimplemented!(),
                 CSI::End => unimplemented!(),
+                CSI::Invalid => unimplemented!(),
             },
             Action::InvalidUtf8 => unreachable!(),
             Action::ControlCharacter(ctrl) => {

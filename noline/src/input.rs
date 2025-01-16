@@ -67,20 +67,27 @@ pub enum CSI {
     Delete,
     End,
     Unknown(u8),
+    Invalid,
 }
 
 impl CSI {
-    fn new(byte: u8, arg1: Option<usize>, arg2: Option<usize>) -> Option<Self> {
+    fn new(byte: u8, arg1: Option<usize>, arg2: Option<usize>) -> Self {
         let c = byte as char;
 
-        Some(match c {
+        match c {
             'A' => Self::CUU(arg1.unwrap_or(1)),
             'B' => Self::CUD(arg1.unwrap_or(1)),
             'C' => Self::CUF(arg1.unwrap_or(1)),
             'D' => Self::CUB(arg1.unwrap_or(1)),
             'H' => Self::CUP(arg1.unwrap_or(1), arg2.unwrap_or(1)),
             'J' => Self::ED(arg1.unwrap_or(0)),
-            'R' => Self::CPR(arg1.unwrap(), arg2.unwrap()),
+            'R' => {
+                if let (Some(arg1), Some(arg2)) = (arg1, arg2) {
+                    Self::CPR(arg1, arg2)
+                } else {
+                    Self::Invalid
+                }
+            }
             'S' => Self::SU(arg1.unwrap_or(1)),
             'T' => Self::SD(arg1.unwrap_or(1)),
             'n' => Self::DSR,
@@ -97,7 +104,7 @@ impl CSI {
                 }
             }
             _ => Self::Unknown(byte),
-        })
+        }
     }
 }
 
@@ -122,7 +129,7 @@ impl Action {
     }
 
     fn csi(byte: u8, arg1: Option<usize>, arg2: Option<usize>) -> Self {
-        Action::ControlSequenceIntroducer(CSI::new(byte, arg1, arg2).unwrap())
+        Action::ControlSequenceIntroducer(CSI::new(byte, arg1, arg2))
     }
 }
 
@@ -282,6 +289,24 @@ pub(crate) mod tests {
         while let Some(action) = actions.pop() {
             assert_eq!(action, Action::Ignore);
         }
+
+        let mut actions = input_sequence(&mut parser, "\x1b[R");
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::Invalid)
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[32R");
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::Invalid)
+        );
+
+        let mut actions = input_sequence(&mut parser, "\x1b[32;R");
+        assert_eq!(
+            actions.pop().unwrap(),
+            Action::ControlSequenceIntroducer(CSI::Invalid)
+        );
 
         let mut actions = input_sequence(&mut parser, "\x1b[A");
 

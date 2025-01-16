@@ -353,6 +353,7 @@ where
                 CSI::DSR => self.generate_output(RingBell),
                 CSI::SU(_) => self.generate_output(RingBell),
                 CSI::SD(_) => self.generate_output(RingBell),
+                CSI::Invalid => self.generate_output(RingBell),
             },
             Action::EscapeSequence(_) => self.generate_output(RingBell),
             Action::Ignore => self.generate_output(Nothing),
