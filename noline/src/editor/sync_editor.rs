@@ -4,16 +4,15 @@
 //! traits.
 //!
 //! Use the [`crate::builder::EditorBuilder`] to build an editor.
-use embedded_io::{Read, ReadExactError, Write};
-
-use crate::error::NolineError;
-
-use crate::history::{get_history_entries, CircularSlice, History};
-use crate::line_buffer::{Buffer, LineBuffer};
+#![allow(elided_named_lifetimes)]
 
 use crate::core::{Line, Prompt};
+use crate::error::NolineError;
+use crate::history::{get_history_entries, CircularSlice, History};
+use crate::line_buffer::{Buffer, LineBuffer};
 use crate::output::{Output, OutputItem};
 use crate::terminal::Terminal;
+use embedded_io::{Read, ReadExactError, Write};
 
 /// Line editor for synchronous IO
 ///

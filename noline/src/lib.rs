@@ -61,17 +61,17 @@
 
 #![cfg_attr(not(test), no_std)]
 
-pub mod async_editor;
-pub mod builder;
 mod core;
 pub mod error;
 pub mod history;
 mod input;
 pub mod line_buffer;
 mod output;
-pub mod sync_editor;
 pub(crate) mod terminal;
 mod utf8;
+
+pub mod editor;
+pub use editor::*;
 
 #[cfg(test)]
 pub(crate) mod testlib;

@@ -2,12 +2,11 @@
 
 use core::marker::PhantomData;
 
+use super::{async_editor, sync_editor};
 use crate::{
-    async_editor,
     error::NolineError,
     history::{History, NoHistory, SliceHistory},
     line_buffer::{Buffer, LineBuffer, NoBuffer, SliceBuffer},
-    sync_editor,
 };
 
 #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
