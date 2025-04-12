@@ -4,6 +4,8 @@
 //! traits.
 //!
 //! Use the [`crate::builder::EditorBuilder`] to build an editor.
+#![allow(elided_named_lifetimes)]
+
 use embedded_io::{Read, ReadExactError, Write};
 
 use crate::error::NolineError;

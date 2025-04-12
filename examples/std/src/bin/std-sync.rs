@@ -1,8 +1,6 @@
-use noline::builder::EditorBuilder;
-use std::io;
-use termion::raw::IntoRawMode;
-
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use embedded_io::{ErrorType, Read as EmbRead, Write as EmbWrite};
+use noline::builder::EditorBuilder;
 use std::io::{Read, Stdin, Stdout, Write};
 
 pub struct IOWrapper {
@@ -45,7 +43,7 @@ impl EmbWrite for IOWrapper {
 }
 
 fn main() {
-    let _stdout = io::stdout().into_raw_mode().unwrap();
+    enable_raw_mode().unwrap();
     let prompt = "> ";
 
     let mut io = IOWrapper::new();
@@ -58,4 +56,5 @@ fn main() {
     while let Ok(line) = editor.readline(prompt, &mut io) {
         writeln!(io, "Read: '{}'", line).unwrap();
     }
+    disable_raw_mode().unwrap();
 }

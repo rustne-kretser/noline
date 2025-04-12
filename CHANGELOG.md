@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Bugfix: Missing CPR arguments causes panic
+- Switched dependency termion to crossterm for setting the raw mode in the std examples for windows compatibility
 
 ## [0.5.0 - 2024-12-12]
 

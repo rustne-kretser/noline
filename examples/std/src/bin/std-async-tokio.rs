@@ -1,6 +1,5 @@
-use embedded_io_async::Write;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use noline::builder::EditorBuilder;
-use termion::raw::IntoRawMode;
 
 use tokio::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,7 +42,7 @@ impl embedded_io_async::Write for IOWrapper {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let term_task = tokio::spawn(async {
-        let _raw_term = std::io::stdout().into_raw_mode().unwrap();
+        enable_raw_mode().unwrap();
         let mut io = IOWrapper::new();
 
         let prompt = "> ";
@@ -58,6 +57,7 @@ async fn main() {
             let s = format!("Read: '{}'\n\r", line);
             io.stdout.write_all(s.as_bytes()).await.unwrap();
         }
+        disable_raw_mode().unwrap();
     });
 
     match term_task.await {
