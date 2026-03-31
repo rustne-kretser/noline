@@ -14,9 +14,9 @@ include = ["**/*.rs", "Cargo.toml"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-embedded-io = "0.6.1"
-embedded-io-async = "0.6.1"
-num_enum = { version = "0.7.2", default-features = false }
+embedded-io = "0.7.1"
+embedded-io-async = "0.7.0"
+num_enum = { version = "0.7.6", default-features = false }
 
 
 [features]
@@ -25,8 +25,8 @@ std = ["embedded-io/std", "embedded-io-async/std"]
 alloc = []
 
 [dev-dependencies]
-crossbeam = "0.8.1"
-termion = "4.0.0"
+crossbeam = "0.8.4"
+termion = "4.0.6"
 
 [package.metadata.docs.rs]
 all-features = true
