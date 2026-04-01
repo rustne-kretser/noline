@@ -1,9 +1,14 @@
 use embassy_futures::join::join;
-use embassy_rp::bind_interrupts;
-use embassy_rp::peripherals::USB;
-use embassy_rp::usb::{Driver, InterruptHandler};
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State, USB_CLASS_CDC};
-use embassy_usb::{Builder, Config};
+use embassy_rp::{
+    bind_interrupts,
+    peripherals::USB,
+    usb::{Driver, InterruptHandler},
+    Peri,
+};
+use embassy_usb::{
+    class::cdc_acm::{CdcAcmClass, State, USB_CLASS_CDC},
+    Builder, Config,
+};
 
 use crate::noline_async::cli;
 
@@ -19,7 +24,7 @@ const BUF_SIZE_CONTROL: usize = 64;
 const MAX_PACKET_SIZE: u16 = 64;
 
 #[embassy_executor::task]
-pub async fn usb_handler(usb: USB) {
+pub async fn usb_handler(usb: Peri<'static, USB>) {
     // Create the driver, from the HAL.
     let driver = Driver::new(usb, Irqs);
 

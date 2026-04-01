@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1.38.0", features = [
+tokio = { version = "1.50.0", features = [
     "full",
     "io-util",
     "sync",
@@ -15,10 +15,10 @@ tokio = { version = "1.38.0", features = [
     "io-std",
 ] }
 noline = { path = "../../noline", features = ["std"] }
-heapless = "0.8.0"
-termion = "4.0.0"
-embedded-io-async = "0.6.1"
-embedded-io = "0.6.1"
+heapless = "0.9.2"
+termion = "4.0.6"
+embedded-io-async = "0.7.0"
+embedded-io = "0.7.1"
 
 [[bin]]
 name = "std-sync"

@@ -35,6 +35,14 @@ where
 #[derive(Debug)]
 struct Error(());
 
+impl core::error::Error for Error {}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::write!(f, "an error occured")
+    }
+}
+
 impl From<EndpointError> for Error {
     fn from(_value: EndpointError) -> Self {
         Self(())

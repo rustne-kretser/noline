@@ -15,6 +15,6 @@ use usb::usb_handler;
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
-    spawner.spawn(blinking_led(p.PIN_25.into())).unwrap();
-    spawner.spawn(usb_handler(p.USB)).unwrap();
+    spawner.spawn(blinking_led(p.PIN_25.into()).unwrap());
+    spawner.spawn(usb_handler(p.USB).unwrap());
 }

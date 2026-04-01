@@ -1,9 +1,9 @@
-use embassy_rp::gpio;
+use embassy_rp::{gpio, Peri};
 use embassy_time::{Duration, Timer};
 use gpio::{AnyPin, Level, Output};
 
 #[embassy_executor::task]
-pub async fn blinking_led(led: AnyPin) {
+pub async fn blinking_led(led: Peri<'static, AnyPin>) {
     let mut led = Output::new(led, Level::Low);
 
     loop {
