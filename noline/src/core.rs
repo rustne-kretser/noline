@@ -84,7 +84,7 @@ where
 {
     fn new(parts: I) -> Self {
         Self {
-            len: parts.clone().map(|part| part.len()).sum(),
+            len: parts.clone().map(|part| ansi_width::ansi_width(part)).sum(),
             parts,
         }
     }

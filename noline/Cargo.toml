@@ -14,6 +14,7 @@ include = ["**/*.rs", "Cargo.toml"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+ansi-width = "0.1.0"
 embedded-io = "0.7.1"
 embedded-io-async = "0.7.0"
 num_enum = { version = "0.7.6", default-features = false }
