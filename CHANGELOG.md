@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Reject zero cursor coordinates and overflowing escape arguments
+- Avoid panics when formatting terminal coordinates above 9999
 - Reject invalid UTF-8 and recover interrupted input
 - Bugfix: Missing CPR arguments causes panic
 
