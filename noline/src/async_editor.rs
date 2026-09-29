@@ -98,20 +98,7 @@ where
             &mut self.terminal,
             &mut self.history,
         );
-
-        let mut reset = line.reset();
-
-        Self::handle_output(reset.start(), io).await?;
-
-        loop {
-            let byte = Self::read_byte(io).await?;
-
-            if let Some(output) = reset.advance(byte) {
-                Self::handle_output(output, io).await?;
-            } else {
-                break;
-            }
-        }
+        Self::handle_output(line.start(), io).await?;
 
         loop {
             let byte = Self::read_byte(io).await?;

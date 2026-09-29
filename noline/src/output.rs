@@ -37,6 +37,7 @@ pub enum CursorMove {
 #[derive(Copy, Clone)]
 pub enum OutputAction {
     Nothing,
+    PrintPrompt,
     MoveCursor(CursorMove),
     ClearAndPrintPrompt,
     ClearAndPrintBuffer,
@@ -493,6 +494,9 @@ where
         }
 
         let steps = match self.action {
+            OutputAction::PrintPrompt => {
+                pack([ClearLine, Print(Printable::from_iter(self.prompt.iter()))])
+            }
             OutputAction::MoveCursor(cursor_move) => {
                 let position = self.new_position(cursor_move);
 
