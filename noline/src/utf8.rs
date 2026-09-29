@@ -171,7 +171,10 @@ impl Utf8Decoder {
             Utf8DecoderState::ExpectingOneByte => {
                 if self.insert_byte(byte).is_ok() {
                     self.state = Utf8DecoderState::Done;
-                    Utf8DecoderStatus::Done(Utf8Char::new(&self.buf, self.pos))
+                    match core::str::from_utf8(&self.buf[..self.pos]) {
+                        Ok(_) => Utf8DecoderStatus::Done(Utf8Char::new(&self.buf, self.pos)),
+                        Err(_) => Utf8DecoderStatus::Error,
+                    }
                 } else {
                     Utf8DecoderStatus::Error
                 }
@@ -200,6 +203,21 @@ impl Utf8Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_encodings() {
+        for bytes in [
+            &[0xc0, 0x80][..],         // Overlong encoding.
+            &[0xed, 0xa0, 0x80],       // Surrogate.
+            &[0xf4, 0x90, 0x80, 0x80], // Above U+10FFFF.
+        ] {
+            let mut decoder = Utf8Decoder::new();
+            assert_eq!(
+                bytes.iter().map(|&byte| decoder.advance(byte)).last(),
+                Some(Utf8DecoderStatus::Error)
+            );
+        }
+    }
 
     #[test]
     fn ascii() {
