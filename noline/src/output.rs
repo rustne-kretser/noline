@@ -41,6 +41,7 @@ pub enum OutputAction {
     MoveCursor(CursorMove),
     ClearAndPrintPrompt,
     ClearAndPrintBuffer,
+    RedrawAt(usize),
     PrintBufferAndMoveCursorForward,
     EraseAfterCursor,
     EraseAndPrintBuffer,
@@ -586,6 +587,19 @@ where
             }
             OutputAction::ProbeSize => {
                 pack([SavePosition, MoveCursorToEdge, GetPosition, RestorePosition])
+            }
+            OutputAction::RedrawAt(cursor) => {
+                let target = self
+                    .terminal
+                    .relative_position(cursor as isize - self.current_offset() as isize);
+                pack([
+                    Move(MoveCursorToPosition::new(
+                        self.new_position(CursorMove::Start),
+                    )),
+                    Erase,
+                    Print(Printable::from_str(self.buffer.as_str())),
+                    Move(MoveCursorToPosition::new(target)),
+                ])
             }
 
             OutputAction::Done => pack([Newline, EndOfString]),

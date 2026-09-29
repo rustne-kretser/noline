@@ -194,6 +194,22 @@ impl<B: Buffer> LineBuffer<B> {
         }
     }
 
+    /// Replace a UTF-8 byte range without changing the buffer on failure.
+    pub(crate) fn replace_range(&mut self, range: Range<usize>, text: &str) -> Result<(), ()> {
+        if self.as_str().get(range.clone()).is_none()
+            || self
+                .buf
+                .capacity()
+                .is_some_and(|capacity| text.len() > capacity - (self.len() - range.len()))
+        {
+            return Err(());
+        }
+        let start = range.start;
+        self.delete_range(range);
+        // Both endpoints were checked above and text is valid UTF-8.
+        unsafe { self.insert_bytes(start, text.as_bytes()) }
+    }
+
     /// Insert string at char position
     pub fn insert_str(&mut self, char_index: usize, s: &str) -> Result<(), ()> {
         unsafe { self.insert_bytes(self.get_byte_position(char_index), s.as_bytes()) }
@@ -350,6 +366,19 @@ mod tests {
         let mut line = LineBuffer::from_slice(&mut storage);
         line.restore_history(history.get_entry(0).unwrap()).unwrap();
         assert_eq!(line.as_str(), "é");
+    }
+
+    #[test]
+    fn replace_range() {
+        let mut storage = [0; 8];
+        let mut line = LineBuffer::from_slice(&mut storage);
+        line.insert_str(0, "café!").unwrap();
+        for (range, text) in [(4..5, "x"), (0..3, "too long")] {
+            assert_eq!(line.replace_range(range, text), Err(()));
+            assert_eq!(line.as_str(), "café!");
+        }
+        line.replace_range(0..5, "tea").unwrap();
+        assert_eq!(line.as_str(), "tea!");
     }
 
     #[test]

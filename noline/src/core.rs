@@ -147,6 +147,34 @@ where
         self.buffer.as_str()
     }
 
+    /// Cursor position as a UTF-8 byte offset, available while editing.
+    pub fn cursor(&self) -> Option<usize> {
+        if !matches!(self.state, LineState::Editing) {
+            return None;
+        }
+        Some(
+            self.as_str()
+                .char_indices()
+                .nth(self.current_position())
+                .map_or(self.as_str().len(), |(offset, _)| offset),
+        )
+    }
+
+    /// Replace a UTF-8 byte range and place the cursor after the inserted text.
+    /// Invalid ranges, control characters, or insufficient capacity ring the bell
+    /// without modifying the line. Fully drain the returned output before editing again.
+    pub fn replace(&mut self, range: core::ops::Range<usize>, text: &str) -> Output<'_, B, I> {
+        let start = range.start;
+        if !matches!(self.state, LineState::Editing)
+            || text.chars().any(char::is_control)
+            || self.buffer.replace_range(range, text).is_err()
+        {
+            return self.generate_output(RingBell);
+        }
+        let cursor = self.as_str()[..start + text.len()].chars().count();
+        self.generate_output(RedrawAt(cursor))
+    }
+
     fn generate_output(&mut self, action: OutputAction) -> Output<'_, B, I> {
         Output::new(&self.prompt, self.buffer, self.terminal, action)
     }
@@ -391,6 +419,49 @@ pub(crate) mod tests {
         assert_eq!(terminal.current_line_as_string(), "é> a!b");
     }
 
+    #[test]
+    fn replace_utf8() {
+        for (columns, row, screen) in [
+            (80, 0, "> get /caféteria/0"),
+            (8, 2, "> get /c\naféteria\n/0"),
+        ] {
+            let (mut terminal, mut editor) =
+                get_terminal_and_editor(3, columns, Cursor::new(row, 0));
+            let mut line = editor.get_line("> ", &mut terminal);
+            advance(&mut terminal, &mut line, "get /cafe/0").unwrap();
+            for byte in line.replace(5..9, "caféteria").into_vec() {
+                terminal.advance(byte);
+            }
+            assert_eq!(line.as_str(), "get /caféteria/0");
+            assert_eq!(line.cursor(), Some(15));
+            assert_eq!(terminal.screen_as_string(), screen);
+            advance(&mut terminal, &mut line, "!").unwrap();
+            assert_eq!(line.as_str(), "get /caféteria!/0");
+        }
+    }
+
+    #[test]
+    fn restart_session() {
+        let mut storage = [0; 32];
+        let mut editor = crate::builder::EditorBuilder::from_slice(&mut storage).build();
+        {
+            let mut session = editor.session("> ");
+            session.start_at(4, 20, 0).unwrap().into_vec();
+            session.advance(b'a').into_vec();
+            session.advance(0x1b).into_vec(); // Incomplete escape sequence.
+            session.replace(0..1, "ab").into_iter().next(); // Interrupted redraw.
+        }
+        let mut terminal = MockTerminal::new(4, 20, Cursor::new(2, 0));
+        let mut session = editor.session("> ");
+        for byte in session.start_at(4, 20, 2).unwrap().into_vec() {
+            terminal.advance(byte);
+        }
+        advance(&mut terminal, &mut session, "x").unwrap();
+        assert_eq!(session.as_str(), "x");
+        assert_eq!(session.cursor(), Some(1));
+        assert_eq!(terminal.current_line_as_string(), "> x");
+    }
+
     struct Editor<B: Buffer, H: History> {
         buffer: LineBuffer<B>,
         terminal: Terminal,
@@ -559,7 +630,7 @@ pub(crate) mod tests {
         advance(&mut terminal, &mut line, "abc").unwrap();
         advance(&mut terminal, &mut line, "\x1b[D").unwrap();
         advance(&mut terminal, &mut line, "X").unwrap();
-        assert_eq!(line.buffer.as_str(), "abXc");
+        assert_eq!(line.as_str(), "abXc");
         assert_eq!(terminal.current_line_as_string(), "> abXc");
         assert_eq!(terminal.get_cursor(), Cursor::new(2, 5));
     }
