@@ -67,7 +67,7 @@ where
     {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
-                io.write(bytes)?;
+                io.write_all(bytes)?;
             }
 
             io.flush()?;
@@ -228,6 +228,7 @@ pub mod tests {
 
     impl embedded_io::Write for MockIO {
         fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            let buf = &buf[..buf.len().min(1)];
             self.stdout.buffer.extend(buf);
             Ok(buf.len())
         }
@@ -243,7 +244,7 @@ pub mod tests {
 
     impl core::fmt::Write for MockIO {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            self.write(s.as_bytes()).or(Err(core::fmt::Error))?;
+            self.write_all(s.as_bytes()).or(Err(core::fmt::Error))?;
             Ok(())
         }
     }

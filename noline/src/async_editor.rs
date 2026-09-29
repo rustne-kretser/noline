@@ -52,7 +52,7 @@ where
     {
         for item in output {
             if let Some(bytes) = item.get_bytes() {
-                io.write(bytes).await?;
+                io.write_all(bytes).await?;
             }
 
             io.flush().await?;
