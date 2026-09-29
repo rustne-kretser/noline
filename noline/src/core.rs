@@ -84,11 +84,12 @@ where
 {
     fn new(parts: I) -> Self {
         Self {
-            len: parts.clone().map(|part| part.len()).sum(),
+            len: parts.clone().map(|part| part.chars().count()).sum(),
             parts,
         }
     }
 
+    /// Number of Unicode scalar values in the prompt.
     pub fn len(&self) -> usize {
         self.len
     }
@@ -375,6 +376,15 @@ pub(crate) mod tests {
 
     use super::*;
 
+    #[test]
+    fn multibyte_prompt() {
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 80, Cursor::new(0, 0));
+        let mut line = editor.get_line("é> ", &mut terminal);
+        advance(&mut terminal, &mut line, "ab\x02!").unwrap();
+        assert_eq!(line.buffer.as_str(), "a!b");
+        assert_eq!(terminal.current_line_as_string(), "é> a!b");
+    }
+
     struct Editor<B: Buffer, H: History> {
         buffer: LineBuffer<B>,
         terminal: Terminal,
@@ -439,7 +449,10 @@ pub(crate) mod tests {
             }
 
             assert_eq!(mockterm.current_line_as_string(), prompt);
-            assert_eq!(mockterm.get_cursor(), Cursor::new(cursor.row, prompt.len()));
+            assert_eq!(
+                mockterm.get_cursor(),
+                Cursor::new(cursor.row, prompt.chars().count())
+            );
 
             line
         }
