@@ -142,6 +142,11 @@ where
         Ok(self.generate_output(PrintPrompt))
     }
 
+    /// Current input, including a submitted line.
+    pub fn as_str(&self) -> &str {
+        self.buffer.as_str()
+    }
+
     fn generate_output(&mut self, action: OutputAction) -> Output<'_, B, I> {
         Output::new(&self.prompt, self.buffer, self.terminal, action)
     }
@@ -187,7 +192,7 @@ where
     }
 
     /// Feed a byte and consume the returned output before feeding another.
-    /// Submission and abort are reported by [`crate::output::OutputItem`].
+    /// Submission and abort are reported by [`crate::editor::OutputItem`].
     /// Input before starting or after completion is ignored.
     pub fn advance(&mut self, byte: u8) -> Output<'_, B, I> {
         if matches!(self.state, LineState::New | LineState::Finished) {

@@ -1,7 +1,7 @@
 //! Buffer to hold line.
 //!
-//! Can be backed by [`std::vec::Vec<u8>`] for dynamic allocation or
-//! [`StaticBuffer`] for static allocation. Custom implementation can
+//! Can be backed by a `Vec<u8>` for dynamic allocation or
+//! [`SliceBuffer`] for fixed-capacity storage. Custom implementations can
 //! be provided with the [`Buffer`] trait.
 
 use crate::{history::CircularSlice, utf8::Utf8Char};

@@ -185,8 +185,7 @@ fn main() -> ! {
     let mut history = [0; 128];
     let mut editor = EditorBuilder::from_slice(&mut buffer)
         .with_slice_history(&mut history)
-        .build_sync(&mut io)
-        .unwrap();
+        .build();
 
     loop {
         match editor.readline(prompt, &mut io) {
