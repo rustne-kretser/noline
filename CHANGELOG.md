@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Complete partial writes in synchronous and asynchronous editors
 - Reject zero cursor coordinates and overflowing escape arguments
 - Avoid panics when formatting terminal coordinates above 9999
 - Reject invalid UTF-8 and recover interrupted input
