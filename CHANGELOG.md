@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Reject invalid UTF-8 and recover interrupted input
 - Fix cursor positioning with multibyte prompts
 - Bugfix: Missing CPR arguments causes panic
 
