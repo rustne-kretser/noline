@@ -184,7 +184,7 @@ impl Parser {
                 Utf8DecoderStatus::Error => {
                     self.state = State::Ground;
                     // A non-continuation byte starts fresh input.
-                    if (0x80..=0xbf).contains(&byte) {
+                    if byte & 0xc0 == 0x80 {
                         Action::InvalidUtf8
                     } else {
                         self.advance(byte)
