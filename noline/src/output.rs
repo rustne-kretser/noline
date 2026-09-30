@@ -9,7 +9,7 @@ use crate::{
 #[cfg_attr(test, derive(Debug))]
 pub enum OutputItem<'a> {
     Slice(&'a [u8]),
-    UintToBytes(UintToBytes<4>),
+    UintToBytes(UintToBytes<{ usize::MAX.ilog10() as usize + 1 }>),
     EndOfString,
     Abort,
 }
@@ -37,9 +37,11 @@ pub enum CursorMove {
 #[derive(Copy, Clone)]
 pub enum OutputAction {
     Nothing,
+    PrintPrompt,
     MoveCursor(CursorMove),
     ClearAndPrintPrompt,
     ClearAndPrintBuffer,
+    RedrawAt(usize),
     PrintBufferAndMoveCursorForward,
     EraseAfterCursor,
     EraseAndPrintBuffer,
@@ -63,22 +65,15 @@ impl<const N: usize> UintToBytes<N> {
     fn from_uint<I: Into<usize>>(n: I) -> Option<Self> {
         let mut n: usize = n.into();
 
-        if n < 10_usize.pow(N as u32) {
-            let mut bytes = [0; N];
-
-            for i in (0..N).rev() {
-                bytes[i] = 0x30 + (n % 10) as u8;
-                n /= 10;
-
-                if n == 0 {
-                    break;
-                }
+        let mut bytes = [0; N];
+        for byte in bytes.iter_mut().rev() {
+            *byte = b'0' + (n % 10) as u8;
+            n /= 10;
+            if n == 0 {
+                return Some(Self { bytes });
             }
-
-            Some(Self { bytes })
-        } else {
-            None
         }
+        None
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -500,6 +495,9 @@ where
         }
 
         let steps = match self.action {
+            OutputAction::PrintPrompt => {
+                pack([ClearLine, Print(Printable::from_iter(self.prompt.iter()))])
+            }
             OutputAction::MoveCursor(cursor_move) => {
                 let position = self.new_position(cursor_move);
 
@@ -590,6 +588,19 @@ where
             OutputAction::ProbeSize => {
                 pack([SavePosition, MoveCursorToEdge, GetPosition, RestorePosition])
             }
+            OutputAction::RedrawAt(cursor) => {
+                let target = self
+                    .terminal
+                    .relative_position(cursor as isize - self.current_offset() as isize);
+                pack([
+                    Move(MoveCursorToPosition::new(
+                        self.new_position(CursorMove::Start),
+                    )),
+                    Erase,
+                    Print(Printable::from_str(self.buffer.as_str())),
+                    Move(MoveCursorToPosition::new(target)),
+                ])
+            }
 
             OutputAction::Done => pack([Newline, EndOfString]),
             OutputAction::Abort => pack([Newline, Abort]),
@@ -630,6 +641,11 @@ mod tests {
         assert_eq!(to_string::<4>(10), "10");
 
         assert_eq!(to_string::<4>(9999), "9999");
+        assert!(UintToBytes::<4>::from_uint(10000usize).is_none());
+        assert_eq!(
+            to_string::<{ usize::MAX.ilog10() as usize + 1 }>(usize::MAX),
+            usize::MAX.to_string()
+        );
     }
 
     #[test]

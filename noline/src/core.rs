@@ -1,7 +1,6 @@
 //! Core library containing the components for building an editor.
 //!
-//! Use [`Initializer`] to get [`crate::terminal::Terminal`] and then
-//! use [`Line`] to read a single line.
+//! Shared editing and terminal initialization state.
 
 use crate::history::{History, HistoryNavigator};
 use crate::input::{Action, ControlCharacter::*, Parser, CSI};
@@ -13,63 +12,12 @@ use crate::terminal::{Cursor, Terminal};
 
 use OutputAction::*;
 
-enum ResetState {
+enum LineState {
     New,
     GetSize,
     GetPosition,
-    Done,
-}
-
-pub struct ResetHandle<'line, 'a, B: Buffer, H: History, I> {
-    line: &'line mut Line<'a, B, H, I>,
-    state: ResetState,
-}
-
-impl<'line, 'a, 'item, 'output, B, H, I> ResetHandle<'line, 'a, B, H, I>
-where
-    I: Iterator<Item = &'item str> + Clone + 'a,
-    B: Buffer,
-    H: History,
-    'item: 'output,
-{
-    fn new(line: &'line mut Line<'a, B, H, I>) -> Self {
-        Self {
-            line,
-            state: ResetState::New,
-        }
-    }
-
-    pub fn start(&mut self) -> Output<'_, B, I> {
-        assert!(matches!(self.state, ResetState::New));
-        self.state = ResetState::GetSize;
-
-        self.line.generate_output(ProbeSize)
-    }
-
-    pub fn advance(&mut self, byte: u8) -> Option<Output<'_, B, I>> {
-        let action = self.line.parser.advance(byte);
-
-        match action {
-            Action::ControlSequenceIntroducer(CSI::CPR(x, y)) => match self.state {
-                ResetState::New => panic!("Invalid state"),
-                ResetState::GetSize => {
-                    self.line.terminal.resize(x, y);
-                    self.state = ResetState::GetPosition;
-                    Some(self.line.generate_output(ClearAndPrintPrompt))
-                }
-                ResetState::GetPosition => {
-                    #[cfg(test)]
-                    dbg!(x, y);
-                    self.line.terminal.reset(Cursor::new(x - 1, y - 1));
-                    self.state = ResetState::Done;
-                    None
-                }
-                ResetState::Done => panic!("Invalid state"),
-            },
-            Action::Ignore => Some(self.line.generate_output(Nothing)),
-            _ => None,
-        }
-    }
+    Editing,
+    Finished,
 }
 
 #[cfg_attr(test, derive(Debug))]
@@ -84,13 +32,18 @@ where
 {
     fn new(parts: I) -> Self {
         Self {
-            len: parts.clone().map(|part| part.len()).sum(),
+            len: parts.clone().map(|part| part.chars().count()).sum(),
             parts,
         }
     }
 
+    /// Number of Unicode scalar values in the prompt.
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
 
@@ -131,30 +84,21 @@ where
     }
 }
 
-// State machine for reading single line.
-//
-// Provide input by calling [`Line::advance`], returning
-// [`crate::output::Output`] object, which
-//
-// Before reading line, call [`Line::reset`] to truncate buffer, clear
-// line, get cursor position and print prompt. Call [`Line::advance`]
-// for each byte read from input and print bytes from
-// [`crate::output::Output`] to output.
+/// A borrowed input session. Start it once, then drain output after each byte.
 pub struct Line<'a, B: Buffer, H: History, I> {
     buffer: &'a mut LineBuffer<B>,
     terminal: &'a mut Terminal,
     parser: Parser,
     prompt: Prompt<I>,
     nav: HistoryNavigator<'a, H>,
+    state: LineState,
 }
 
-impl<'a, 'item, 'output, B: Buffer, H: History, I> Line<'a, B, H, I>
+impl<'a, 'item, B: Buffer, H: History, I> Line<'a, B, H, I>
 where
     I: Iterator<Item = &'item str> + Clone + 'a,
-    'item: 'output,
-    'a: 'output,
 {
-    pub fn new(
+    pub(crate) fn new(
         prompt: impl Into<Prompt<I>>,
         buffer: &'a mut LineBuffer<B>,
         terminal: &'a mut Terminal,
@@ -166,13 +110,69 @@ where
             parser: Parser::new(),
             prompt: prompt.into(),
             nav: HistoryNavigator::new(history),
+            state: LineState::New,
         }
     }
 
-    // Truncate buffer, clear line and print prompt
-    pub fn reset(&mut self) -> ResetHandle<'_, 'a, B, H, I> {
+    /// Clear the input and probe terminal size and cursor position.
+    /// The terminal must answer the queries before ordinary input is accepted.
+    pub fn start(&mut self) -> Output<'_, B, I> {
         self.buffer.truncate();
-        ResetHandle::new(self)
+        self.parser = Parser::new();
+        self.nav.reset();
+        self.state = LineState::GetSize;
+        self.generate_output(ProbeSize)
+    }
+
+    /// Clear the current screen line and print the prompt without probing.
+    /// `row` is the known zero-based screen row; dimensions are in character cells.
+    /// Invalid dimensions or an out-of-bounds row return [`crate::error::NolineError::ParserError`].
+    pub fn start_at(
+        &mut self,
+        rows: usize,
+        columns: usize,
+        row: usize,
+    ) -> Result<Output<'_, B, I>, crate::error::NolineError> {
+        *self.terminal =
+            Terminal::try_new(rows, columns, row).ok_or(crate::error::NolineError::ParserError)?;
+        self.buffer.truncate();
+        self.parser = Parser::new();
+        self.nav.reset();
+        self.state = LineState::Editing;
+        Ok(self.generate_output(PrintPrompt))
+    }
+
+    /// Current input, including a submitted line.
+    pub fn as_str(&self) -> &str {
+        self.buffer.as_str()
+    }
+
+    /// Cursor position as a UTF-8 byte offset, available while editing.
+    pub fn cursor(&self) -> Option<usize> {
+        if !matches!(self.state, LineState::Editing) {
+            return None;
+        }
+        Some(
+            self.as_str()
+                .char_indices()
+                .nth(self.current_position())
+                .map_or(self.as_str().len(), |(offset, _)| offset),
+        )
+    }
+
+    /// Replace a UTF-8 byte range and place the cursor after the inserted text.
+    /// Invalid ranges, control characters, or insufficient capacity ring the bell
+    /// without modifying the line. Fully drain the returned output before editing again.
+    pub fn replace(&mut self, range: core::ops::Range<usize>, text: &str) -> Output<'_, B, I> {
+        let start = range.start;
+        if !matches!(self.state, LineState::Editing)
+            || text.chars().any(char::is_control)
+            || self.buffer.replace_range(range, text).is_err()
+        {
+            return self.generate_output(RingBell);
+        }
+        let cursor = self.as_str()[..start + text.len()].chars().count();
+        self.generate_output(RedrawAt(cursor))
     }
 
     fn generate_output(&mut self, action: OutputAction) -> Output<'_, B, I> {
@@ -194,19 +194,10 @@ where
             Err(())
         };
 
-        if let Ok(entry) = entry {
-            let (slice1, slice2) = entry.get_slices();
-
-            self.buffer.truncate();
-            unsafe {
-                self.buffer.insert_bytes(0, slice1).unwrap();
-                self.buffer.insert_bytes(slice1.len(), slice2).unwrap();
-            }
-
-            self.generate_output(ClearAndPrintBuffer)
-        } else {
-            self.generate_output(RingBell)
-        }
+        let action = entry
+            .and_then(|entry| self.buffer.restore_history(entry))
+            .map_or(RingBell, |_| ClearAndPrintBuffer);
+        self.generate_output(action)
     }
 
     fn history_move_down(&mut self) -> Output<'_, B, I> {
@@ -216,26 +207,52 @@ where
             return self.generate_output(RingBell);
         };
 
-        if let Ok(entry) = entry {
-            let (slice1, slice2) = entry.get_slices();
-
-            self.buffer.truncate();
-            unsafe {
-                self.buffer.insert_bytes(0, slice1).unwrap();
-                self.buffer.insert_bytes(slice1.len(), slice2).unwrap();
-            }
+        let action = if let Ok(entry) = entry {
+            self.buffer
+                .restore_history(entry)
+                .map_or(RingBell, |_| ClearAndPrintBuffer)
         } else {
             self.nav.reset();
             self.buffer.truncate();
-        }
-
-        self.generate_output(ClearAndPrintBuffer)
+            ClearAndPrintBuffer
+        };
+        self.generate_output(action)
     }
 
-    // Advance state machine by one byte. Returns output iterator over
-    // 0 or more byte slices.
-    pub(crate) fn advance(&mut self, byte: u8) -> Output<'_, B, I> {
+    /// Feed a byte and consume the returned output before feeding another.
+    /// Submission and abort are reported by [`crate::editor::OutputItem`].
+    /// Input before starting or after completion is ignored.
+    pub fn advance(&mut self, byte: u8) -> Output<'_, B, I> {
+        if matches!(self.state, LineState::New | LineState::Finished) {
+            return self.generate_output(Nothing);
+        }
         let action = self.parser.advance(byte);
+
+        if !matches!(self.state, LineState::Editing) {
+            return match (action, &self.state) {
+                (Action::Ignore, _) => self.generate_output(Nothing),
+                (
+                    Action::ControlSequenceIntroducer(CSI::CPR(rows, columns)),
+                    LineState::GetSize,
+                ) if Terminal::try_new(rows, columns, 0).is_some() => {
+                    self.terminal.resize(rows, columns);
+                    self.state = LineState::GetPosition;
+                    self.generate_output(ClearAndPrintPrompt)
+                }
+                (
+                    Action::ControlSequenceIntroducer(CSI::CPR(row, column)),
+                    LineState::GetPosition,
+                ) if self.terminal.contains(row - 1, column - 1) => {
+                    self.terminal.reset(Cursor::new(row - 1, column - 1));
+                    self.state = LineState::Editing;
+                    self.generate_output(Nothing)
+                }
+                _ => {
+                    self.state = LineState::Finished;
+                    self.generate_output(Abort)
+                }
+            };
+        }
 
         #[cfg(test)]
         dbg!(action);
@@ -253,7 +270,10 @@ where
             Action::ControlCharacter(c) => match c {
                 CtrlA => self.generate_output(MoveCursor(CursorMove::Start)),
                 CtrlB => self.generate_output(MoveCursor(CursorMove::Back)),
-                CtrlC => self.generate_output(Abort),
+                CtrlC => {
+                    self.state = LineState::Finished;
+                    self.generate_output(Abort)
+                }
                 CtrlD => {
                     let len = self.buffer.len();
 
@@ -268,6 +288,7 @@ where
                             self.generate_output(RingBell)
                         }
                     } else {
+                        self.state = LineState::Finished;
                         self.generate_output(Abort)
                     }
                 }
@@ -310,6 +331,7 @@ where
                         let _ = self.nav.history.add_entry(self.buffer.as_str());
                     }
 
+                    self.state = LineState::Finished;
                     self.generate_output(Done)
                 }
                 CtrlH | Backspace => {
@@ -340,11 +362,7 @@ where
                     }
                 }
                 CSI::End => self.generate_output(MoveCursor(CursorMove::End)),
-                CSI::CPR(row, column) => {
-                    let cursor = Cursor::new(row - 1, column - 1);
-                    self.terminal.reset(cursor);
-                    self.generate_output(Nothing)
-                }
+                CSI::CPR(_, _) => self.generate_output(Nothing),
                 CSI::Unknown(_) => self.generate_output(RingBell),
                 CSI::CUU(_) => self.history_move_up(),
                 CSI::CUD(_) => self.history_move_down(),
@@ -375,6 +393,75 @@ pub(crate) mod tests {
 
     use super::*;
 
+    #[test]
+    fn oversized_history() {
+        let mut storage = [0; 2];
+        let mut entries = [0; 32];
+        let mut history = SliceHistory::new(&mut entries);
+        history.load_entries(["ok", "too long"].into_iter());
+        let mut editor = Editor::new(LineBuffer::from_slice(&mut storage), history);
+        let mut terminal = MockTerminal::new(4, 80, Cursor::new(0, 0));
+        let mut line = editor.get_line("> ", &mut terminal);
+        assert_eq!(advance(&mut terminal, &mut line, "\x10"), Err(()));
+        assert_eq!(line.buffer.as_str(), "");
+        advance(&mut terminal, &mut line, "\x10").unwrap();
+        assert_eq!(line.buffer.as_str(), "ok");
+        assert_eq!(advance(&mut terminal, &mut line, "\x0e"), Err(()));
+        assert_eq!(line.buffer.as_str(), "ok");
+    }
+
+    #[test]
+    fn multibyte_prompt() {
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 80, Cursor::new(0, 0));
+        let mut line = editor.get_line("é> ", &mut terminal);
+        advance(&mut terminal, &mut line, "ab\x02!").unwrap();
+        assert_eq!(line.buffer.as_str(), "a!b");
+        assert_eq!(terminal.current_line_as_string(), "é> a!b");
+    }
+
+    #[test]
+    fn replace_utf8() {
+        for (columns, row, screen) in [
+            (80, 0, "> get /caféteria/0"),
+            (8, 2, "> get /c\naféteria\n/0"),
+        ] {
+            let (mut terminal, mut editor) =
+                get_terminal_and_editor(3, columns, Cursor::new(row, 0));
+            let mut line = editor.get_line("> ", &mut terminal);
+            advance(&mut terminal, &mut line, "get /cafe/0").unwrap();
+            for byte in line.replace(5..9, "caféteria").into_vec() {
+                terminal.advance(byte);
+            }
+            assert_eq!(line.as_str(), "get /caféteria/0");
+            assert_eq!(line.cursor(), Some(15));
+            assert_eq!(terminal.screen_as_string(), screen);
+            advance(&mut terminal, &mut line, "!").unwrap();
+            assert_eq!(line.as_str(), "get /caféteria!/0");
+        }
+    }
+
+    #[test]
+    fn restart_session() {
+        let mut storage = [0; 32];
+        let mut editor = crate::builder::EditorBuilder::from_slice(&mut storage).build();
+        {
+            let mut session = editor.session("> ");
+            session.start_at(4, 20, 0).unwrap().into_vec();
+            session.advance(b'a').into_vec();
+            session.advance(0x1b).into_vec(); // Incomplete escape sequence.
+            session.replace(0..1, "ab").into_iter().next(); // Interrupted redraw.
+        }
+        let mut terminal = MockTerminal::new(4, 20, Cursor::new(2, 0));
+        let mut session = editor.session("> ");
+        for byte in session.start_at(4, 20, 2).unwrap().into_vec() {
+            terminal.advance(byte);
+        }
+        advance(&mut terminal, &mut session, "x").unwrap();
+        assert_eq!(session.as_str(), "x");
+        assert_eq!(session.cursor(), Some(1));
+        assert_eq!(terminal.current_line_as_string(), "> x");
+    }
+
     struct Editor<B: Buffer, H: History> {
         buffer: LineBuffer<B>,
         terminal: Terminal,
@@ -396,7 +483,7 @@ pub(crate) mod tests {
             &mut self,
             prompt: &'static str,
             mockterm: &mut MockTerminal,
-        ) -> Line<'_, B, H, StrIter> {
+        ) -> Line<'_, B, H, StrIter<'_>> {
             let cursor = mockterm.get_cursor();
             let mut line = Line::new(
                 prompt,
@@ -405,41 +492,24 @@ pub(crate) mod tests {
                 &mut self.history,
             );
 
-            let mut reset = line.reset();
-
-            let mut reset_start: Vec<u8> = reset
-                .start()
-                .into_iter()
-                .filter_map(|item| item.get_bytes().map(|bytes| bytes.to_vec()))
-                .flatten()
-                .collect();
-
+            let mut reset_start = line.start().into_vec();
             while !reset_start.is_empty() {
                 let term_response: Vec<u8> = reset_start
                     .into_iter()
                     .filter_map(|b| mockterm.advance(b))
-                    .flat_map(|output| output.into_iter())
+                    .flatten()
                     .collect();
-
                 reset_start = term_response
-                    .iter()
-                    .copied()
-                    .filter_map(|b| {
-                        reset.advance(b).map(|output| {
-                            output
-                                .into_iter()
-                                .map(|item| item.get_bytes().map(|bytes| bytes.to_vec()))
-                                .collect::<Vec<_>>()
-                        })
-                    })
-                    .flatten()
-                    .flatten()
-                    .flatten()
+                    .into_iter()
+                    .flat_map(|b| line.advance(b).into_vec())
                     .collect();
             }
 
             assert_eq!(mockterm.current_line_as_string(), prompt);
-            assert_eq!(mockterm.get_cursor(), Cursor::new(cursor.row, prompt.len()));
+            assert_eq!(
+                mockterm.get_cursor(),
+                Cursor::new(cursor.row, prompt.chars().count())
+            );
 
             line
         }
@@ -500,9 +570,7 @@ pub(crate) mod tests {
 
         dbg!(terminal.get_cursor());
 
-        let mut reset = line.reset();
-
-        let probe = reset
+        let probe = line
             .start()
             .into_iter()
             .flat_map(|item| item.get_bytes().unwrap().to_vec())
@@ -513,7 +581,7 @@ pub(crate) mod tests {
         let output = b"\x1b[91;45R"
             .iter()
             .copied()
-            .flat_map(|b| reset.advance(b).unwrap().into_vec())
+            .flat_map(|b| line.advance(b).into_vec())
             .collect::<Vec<_>>();
 
         dbg!(terminal.get_cursor());
@@ -523,13 +591,7 @@ pub(crate) mod tests {
         let output = b"\x1b[2;3R"
             .iter()
             .copied()
-            .flat_map(|b| {
-                if let Some(output) = reset.advance(b) {
-                    output.into_vec()
-                } else {
-                    Vec::new()
-                }
-            })
+            .flat_map(|b| line.advance(b).into_vec())
             .collect::<Vec<_>>();
 
         dbg!(terminal.get_cursor());
@@ -550,6 +612,27 @@ pub(crate) mod tests {
 
         dbg!(&line.terminal);
         assert_eq!(terminal.get_cursor(), line.terminal.get_cursor());
+    }
+
+    #[test]
+    fn configured_session() {
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 20, Cursor::new(2, 0));
+        let mut line = Line::new(
+            "> ",
+            &mut editor.buffer,
+            &mut editor.terminal,
+            &mut editor.history,
+        );
+        assert!(line.start_at(4, 0, 2).is_err());
+        for byte in line.start_at(4, 20, 2).unwrap().into_vec() {
+            assert!(terminal.advance(byte).is_none()); // No terminal queries.
+        }
+        advance(&mut terminal, &mut line, "abc").unwrap();
+        advance(&mut terminal, &mut line, "\x1b[D").unwrap();
+        advance(&mut terminal, &mut line, "X").unwrap();
+        assert_eq!(line.as_str(), "abXc");
+        assert_eq!(terminal.current_line_as_string(), "> abXc");
+        assert_eq!(terminal.get_cursor(), Cursor::new(2, 5));
     }
 
     #[test]

@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Reject invalid UTF-8 and recover interrupted input
+- Reject zero cursor coordinates and overflowing escape arguments
+- Avoid panics when formatting terminal coordinates above 9999
+- Complete partial writes in synchronous and asynchronous editors
+- Fix cursor positioning with multibyte prompts
+- Preserve input when a history entry exceeds the line buffer capacity
+- Breaking: Replace sync/async editors with `editor::Editor`; use `build()`
+  for construction and `readline_async()` for asynchronous reading
+- Add incremental editor sessions with explicit terminal initialization
+- Add UTF-8 cursor offsets and range replacement
 - Bugfix: Missing CPR arguments causes panic
 
 ## [0.5.0 - 2024-12-12]
