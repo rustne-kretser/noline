@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for construction and `readline_async()` for asynchronous reading
 - Add incremental editor sessions with explicit terminal initialization
 - Add UTF-8 cursor offsets and range replacement
+- Print messages during incremental editing without losing the draft or cursor
 - Bugfix: Missing CPR arguments causes panic
 
 ## [0.5.0 - 2024-12-12]

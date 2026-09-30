@@ -462,6 +462,85 @@ where
         }
     }
 
+    pub(crate) fn print(
+        self,
+        text: &'a str,
+        editing: bool,
+    ) -> impl Iterator<Item = OutputItem<'a>> + 'a
+    where
+        I: 'a,
+        'item: 'a,
+    {
+        enum Phase {
+            LineBreak { force: bool },
+            Text,
+            Prompt,
+            Buffer,
+            Cursor,
+            Done,
+        }
+        let valid = editing && text.lines().all(|line| !line.chars().any(char::is_control));
+        let cursor = if editing { self.current_offset() } else { 0 };
+        let mut phase = if valid && !text.is_empty() {
+            Phase::LineBreak { force: false }
+        } else {
+            Phase::Done
+        };
+        let mut step = if text.is_empty() {
+            Done
+        } else if !valid {
+            Bell
+        } else {
+            Move(MoveCursorToPosition::new(
+                self.new_position(CursorMove::End),
+            ))
+        };
+        let mut lines = text.lines();
+        core::iter::from_fn(move || loop {
+            if let Some(item) = step.advance(self.terminal) {
+                return Some(item);
+            }
+            step = match phase {
+                Phase::LineBreak { force } => {
+                    phase = Phase::Text;
+                    if force || self.terminal.get_cursor().column != 0 {
+                        Newline
+                    } else {
+                        Done
+                    }
+                }
+                Phase::Text => {
+                    if let Some(line) = lines.next() {
+                        phase = Phase::LineBreak {
+                            force: line.is_empty(),
+                        };
+                        Print(Printable::from_str(line))
+                    } else {
+                        phase = Phase::Prompt;
+                        continue;
+                    }
+                }
+                Phase::Prompt => {
+                    self.terminal.reset(self.terminal.get_cursor());
+                    phase = Phase::Buffer;
+                    Print(Printable::from_iter(self.prompt.iter()))
+                }
+                Phase::Buffer => {
+                    phase = Phase::Cursor;
+                    Print(Printable::from_str(self.buffer.as_str()))
+                }
+                Phase::Cursor => {
+                    phase = Phase::Done;
+                    let target = self.terminal.relative_position(
+                        (self.prompt.len() + cursor) as isize - self.terminal.current_offset(),
+                    );
+                    Move(MoveCursorToPosition::new(target))
+                }
+                Phase::Done => return None,
+            };
+        })
+    }
+
     #[cfg(test)]
     pub fn into_vec(self) -> Vec<u8> {
         self.into_iter()

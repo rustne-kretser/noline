@@ -9,6 +9,7 @@
 //! editor's cursor state. After interrupted output or a disconnect, restore the
 //! terminal to a state that accepts commands, then start a new session.
 //!
+//! Use [`Session::print`] to display plain text between edits and redraw the draft.
 //! Cursor and replacement ranges use UTF-8 byte offsets.
 //! Display positioning assumes one cell per Unicode scalar; wide and combining
 //! characters are not supported.

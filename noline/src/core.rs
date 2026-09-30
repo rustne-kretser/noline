@@ -175,6 +175,21 @@ where
         self.generate_output(RedrawAt(cursor))
     }
 
+    /// Print plain text below the draft, then redraw it with the cursor preserved.
+    /// LF and CRLF are accepted; other control characters ring the bell without
+    /// printing. Calls outside editing also ring the bell. Empty text does nothing.
+    /// Fully drain the output before feeding input or performing another operation.
+    pub fn print<'s>(
+        &'s mut self,
+        text: &'s str,
+    ) -> impl Iterator<Item = crate::output::OutputItem<'s>> + 's
+    where
+        'item: 's,
+    {
+        let editing = matches!(self.state, LineState::Editing);
+        self.generate_output(Nothing).print(text, editing)
+    }
+
     fn generate_output(&mut self, action: OutputAction) -> Output<'_, B, I> {
         Output::new(&self.prompt, self.buffer, self.terminal, action)
     }
@@ -392,6 +407,59 @@ pub(crate) mod tests {
     use crate::testlib::{csi, MockTerminal, ToByteVec};
 
     use super::*;
+
+    #[test]
+    fn print_preserves_editing() {
+        for columns in [8, 20] {
+            let mut terminal = MockTerminal::new(4, columns, Cursor::new(3, 0));
+            let mut editor = Editor::new(LineBuffer::new_unbounded(), UnboundedHistory::new());
+            editor
+                .history
+                .load_entries(["older", "abcdefgh"].into_iter());
+            let mut line = editor.get_line("> ", &mut terminal);
+            advance(&mut terminal, &mut line, "\x10\x1b[D").unwrap();
+            assert_eq!(line.cursor(), Some(7));
+            // Finish an escape sequence after printing: parser state must survive.
+            advance(&mut terminal, &mut line, "\x1b[").unwrap();
+            for item in line.print("first\r\n12345678\n\nlast\n") {
+                for &byte in item.get_bytes().unwrap() {
+                    assert!(terminal.advance(byte).is_none());
+                }
+            }
+            assert_eq!(line.as_str(), "abcdefgh");
+            assert_eq!(line.cursor(), Some(7));
+            assert_eq!(
+                terminal.screen_as_string(),
+                if columns == 8 {
+                    "last\n> abcdef\ngh"
+                } else {
+                    "12345678\nlast\n> abcdefgh"
+                }
+            );
+            assert_eq!(line.terminal.get_cursor(), terminal.get_cursor());
+            advance(&mut terminal, &mut line, "DX").unwrap();
+            assert_eq!(line.as_str(), "abcdefXgh");
+            advance(&mut terminal, &mut line, "\x10").unwrap();
+            assert_eq!(line.as_str(), "older");
+        }
+    }
+
+    #[test]
+    fn print_rejects_controls_before_output() {
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 20, Cursor::new(0, 0));
+        let mut line = editor.get_line("> ", &mut terminal);
+        advance(&mut terminal, &mut line, "abc").unwrap();
+        assert_eq!(line.print("").count(), 0);
+        for text in ["ok\n\x1b[2J", "ok\rno", "ok\r", "ok\tno"] {
+            let bytes: Vec<_> = line
+                .print(text)
+                .flat_map(|item| item.get_bytes().unwrap().to_vec())
+                .collect();
+            assert_eq!(bytes, b"\x07");
+            assert_eq!(line.as_str(), "abc");
+            assert_eq!(line.cursor(), Some(3));
+        }
+    }
 
     #[test]
     fn oversized_history() {
