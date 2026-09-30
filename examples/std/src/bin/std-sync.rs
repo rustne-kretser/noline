@@ -52,8 +52,7 @@ fn main() {
 
     let mut editor = EditorBuilder::new_unbounded()
         .with_unbounded_history()
-        .build_sync(&mut io)
-        .unwrap();
+        .build();
 
     while let Ok(line) = editor.readline(prompt, &mut io) {
         writeln!(io, "Read: '{}'", line).unwrap();

@@ -9,7 +9,7 @@ use crate::{
 #[cfg_attr(test, derive(Debug))]
 pub enum OutputItem<'a> {
     Slice(&'a [u8]),
-    UintToBytes(UintToBytes<4>),
+    UintToBytes(UintToBytes<{ usize::MAX.ilog10() as usize + 1 }>),
     EndOfString,
     Abort,
 }
@@ -37,9 +37,11 @@ pub enum CursorMove {
 #[derive(Copy, Clone)]
 pub enum OutputAction {
     Nothing,
+    PrintPrompt,
     MoveCursor(CursorMove),
     ClearAndPrintPrompt,
     ClearAndPrintBuffer,
+    RedrawAt(usize),
     PrintBufferAndMoveCursorForward,
     EraseAfterCursor,
     EraseAndPrintBuffer,
@@ -63,22 +65,15 @@ impl<const N: usize> UintToBytes<N> {
     fn from_uint<I: Into<usize>>(n: I) -> Option<Self> {
         let mut n: usize = n.into();
 
-        if n < 10_usize.pow(N as u32) {
-            let mut bytes = [0; N];
-
-            for i in (0..N).rev() {
-                bytes[i] = 0x30 + (n % 10) as u8;
-                n /= 10;
-
-                if n == 0 {
-                    break;
-                }
+        let mut bytes = [0; N];
+        for byte in bytes.iter_mut().rev() {
+            *byte = b'0' + (n % 10) as u8;
+            n /= 10;
+            if n == 0 {
+                return Some(Self { bytes });
             }
-
-            Some(Self { bytes })
-        } else {
-            None
         }
+        None
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -467,6 +462,85 @@ where
         }
     }
 
+    pub(crate) fn print(
+        self,
+        text: &'a str,
+        editing: bool,
+    ) -> impl Iterator<Item = OutputItem<'a>> + 'a
+    where
+        I: 'a,
+        'item: 'a,
+    {
+        enum Phase {
+            LineBreak { force: bool },
+            Text,
+            Prompt,
+            Buffer,
+            Cursor,
+            Done,
+        }
+        let valid = editing && text.lines().all(|line| !line.chars().any(char::is_control));
+        let cursor = if editing { self.current_offset() } else { 0 };
+        let mut phase = if valid && !text.is_empty() {
+            Phase::LineBreak { force: false }
+        } else {
+            Phase::Done
+        };
+        let mut step = if text.is_empty() {
+            Done
+        } else if !valid {
+            Bell
+        } else {
+            Move(MoveCursorToPosition::new(
+                self.new_position(CursorMove::End),
+            ))
+        };
+        let mut lines = text.lines();
+        core::iter::from_fn(move || loop {
+            if let Some(item) = step.advance(self.terminal) {
+                return Some(item);
+            }
+            step = match phase {
+                Phase::LineBreak { force } => {
+                    phase = Phase::Text;
+                    if force || self.terminal.get_cursor().column != 0 {
+                        Newline
+                    } else {
+                        Done
+                    }
+                }
+                Phase::Text => {
+                    if let Some(line) = lines.next() {
+                        phase = Phase::LineBreak {
+                            force: line.is_empty(),
+                        };
+                        Print(Printable::from_str(line))
+                    } else {
+                        phase = Phase::Prompt;
+                        continue;
+                    }
+                }
+                Phase::Prompt => {
+                    self.terminal.reset(self.terminal.get_cursor());
+                    phase = Phase::Buffer;
+                    Print(Printable::from_iter(self.prompt.iter()))
+                }
+                Phase::Buffer => {
+                    phase = Phase::Cursor;
+                    Print(Printable::from_str(self.buffer.as_str()))
+                }
+                Phase::Cursor => {
+                    phase = Phase::Done;
+                    let target = self.terminal.relative_position(
+                        (self.prompt.len() + cursor) as isize - self.terminal.current_offset(),
+                    );
+                    Move(MoveCursorToPosition::new(target))
+                }
+                Phase::Done => return None,
+            };
+        })
+    }
+
     #[cfg(test)]
     pub fn into_vec(self) -> Vec<u8> {
         self.into_iter()
@@ -500,6 +574,9 @@ where
         }
 
         let steps = match self.action {
+            OutputAction::PrintPrompt => {
+                pack([ClearLine, Print(Printable::from_iter(self.prompt.iter()))])
+            }
             OutputAction::MoveCursor(cursor_move) => {
                 let position = self.new_position(cursor_move);
 
@@ -590,6 +667,19 @@ where
             OutputAction::ProbeSize => {
                 pack([SavePosition, MoveCursorToEdge, GetPosition, RestorePosition])
             }
+            OutputAction::RedrawAt(cursor) => {
+                let target = self
+                    .terminal
+                    .relative_position(cursor as isize - self.current_offset() as isize);
+                pack([
+                    Move(MoveCursorToPosition::new(
+                        self.new_position(CursorMove::Start),
+                    )),
+                    Erase,
+                    Print(Printable::from_str(self.buffer.as_str())),
+                    Move(MoveCursorToPosition::new(target)),
+                ])
+            }
 
             OutputAction::Done => pack([Newline, EndOfString]),
             OutputAction::Abort => pack([Newline, Abort]),
@@ -630,6 +720,11 @@ mod tests {
         assert_eq!(to_string::<4>(10), "10");
 
         assert_eq!(to_string::<4>(9999), "9999");
+        assert!(UintToBytes::<4>::from_uint(10000usize).is_none());
+        assert_eq!(
+            to_string::<{ usize::MAX.ilog10() as usize + 1 }>(usize::MAX),
+            usize::MAX.to_string()
+        );
     }
 
     #[test]

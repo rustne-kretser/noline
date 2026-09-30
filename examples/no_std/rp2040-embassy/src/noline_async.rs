@@ -129,11 +129,9 @@ pub async fn cli<'d, T: Instance + 'd>(
 
         let mut editor = EditorBuilder::from_slice(&mut buffer)
             .with_slice_history(&mut history)
-            .build_async(&mut io)
-            .await
-            .unwrap();
+            .build();
 
-        while let Ok(line) = editor.readline(prompt, &mut io).await {
+        while let Ok(line) = editor.readline_async(prompt, &mut io).await {
             // Create a buffer that can take the MAX_LINE_SIZE along with the 'Read: ''\r/n' text
             let mut buf = [0u8; MAX_LINE_SIZE + 12];
             let s = format_no_std::show(&mut buf, format_args!("Read: '{}'\r\n", line))

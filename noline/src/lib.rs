@@ -21,9 +21,8 @@
 //! input and yielding iterators over byte slices. Because this is
 //! done without any IO, Noline can be adapted to work on any platform.
 //!
-//! Noline comes with multiple implemenations:
-//! - [`sync_editor::Editor`] – Editor for synchronous IO
-//! - [`async_editor::Editor`] - Editor for asynchronous IO
+//! [`editor::Editor`] supports synchronous and asynchronous IO, or incremental
+//! sessions for application-managed IO.
 //!
 //! Editors can be built using [`builder::EditorBuilder`].
 //!
@@ -49,10 +48,11 @@
 //! let mut io = MyIO {}; // IO handler, see full examples for details
 //!                       // how to implement it
 //!
-//! let mut editor = EditorBuilder::new_unbounded()
-//!     .with_unbounded_history()
-//!     .build_sync(&mut io)
-//!     .unwrap();
+//! let mut buffer = [0; 128];
+//! let mut history = [0; 512];
+//! let mut editor = EditorBuilder::from_slice(&mut buffer)
+//!     .with_slice_history(&mut history)
+//!     .build();
 //!
 //! while let Ok(line) = editor.readline(prompt, &mut io) {
 //!     writeln!(io, "Read: '{}'", line).unwrap();
@@ -61,15 +61,16 @@
 
 #![cfg_attr(not(test), no_std)]
 
-pub mod async_editor;
+mod async_editor;
 pub mod builder;
 mod core;
+pub mod editor;
 pub mod error;
 pub mod history;
 mod input;
 pub mod line_buffer;
 mod output;
-pub mod sync_editor;
+mod sync_editor;
 pub(crate) mod terminal;
 mod utf8;
 

@@ -1,4 +1,3 @@
-use embedded_io_async::Write;
 use noline::builder::EditorBuilder;
 use termion::raw::IntoRawMode;
 
@@ -50,11 +49,9 @@ async fn main() {
 
         let mut editor = EditorBuilder::new_unbounded()
             .with_unbounded_history()
-            .build_async(&mut io)
-            .await
-            .unwrap();
+            .build();
 
-        while let Ok(line) = editor.readline(prompt, &mut io).await {
+        while let Ok(line) = editor.readline_async(prompt, &mut io).await {
             let s = format!("Read: '{}'\n\r", line);
             io.stdout.write_all(s.as_bytes()).await.unwrap();
         }

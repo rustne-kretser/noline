@@ -82,7 +82,7 @@ impl CSI {
             'H' => Self::CUP(arg1.unwrap_or(1), arg2.unwrap_or(1)),
             'J' => Self::ED(arg1.unwrap_or(0)),
             'R' => {
-                if let (Some(arg1), Some(arg2)) = (arg1, arg2) {
+                if let (Some(arg1 @ 1..), Some(arg2 @ 1..)) = (arg1, arg2) {
                     Self::CPR(arg1, arg2)
                 } else {
                     Self::Invalid
@@ -136,11 +136,12 @@ impl Action {
 #[derive(Debug, Eq, PartialEq)]
 enum State {
     Ground,
-    Utf8Sequence(Option<Utf8Decoder>),
+    Utf8Sequence(Utf8Decoder),
     EscapeSequence,
     CSIStart,
     CSIArg1(Option<usize>),
     CSIArg2(Option<usize>, Option<usize>),
+    CSIIgnore,
 }
 
 pub struct Parser {
@@ -155,44 +156,47 @@ impl Parser {
     }
 
     pub fn advance(&mut self, byte: u8) -> Action {
+        // Control keys cancel partial input; ESC starts a fresh escape sequence.
+        match byte {
+            0x1b => {
+                self.state = State::EscapeSequence;
+                return Action::Ignore;
+            }
+            0x0..=0x1f | 0x7f => {
+                self.state = State::Ground;
+                return Action::control_character(byte);
+            }
+            _ => (),
+        }
         match self.state {
-            State::Ground => match byte {
-                0x1b => {
-                    self.state = State::EscapeSequence;
-                    Action::Ignore
-                }
-                0x0..=0x1a | 0x1c..=0x1f | 0x7f => Action::control_character(byte),
-                0x20..=0x7e | 0x80..=0xff => {
-                    let mut decoder = Utf8Decoder::new();
-
-                    match decoder.advance(byte) {
-                        Utf8DecoderStatus::Continuation => {
-                            self.state = State::Utf8Sequence(Some(decoder));
-                            Action::Ignore
-                        }
-                        Utf8DecoderStatus::Done(c) => Action::Print(c),
-                        Utf8DecoderStatus::Error => Action::InvalidUtf8,
-                    }
-                }
-            },
-            State::Utf8Sequence(ref mut decoder) => {
-                let mut decoder = decoder.take().unwrap();
+            State::Ground => {
+                let mut decoder = Utf8Decoder::new();
 
                 match decoder.advance(byte) {
                     Utf8DecoderStatus::Continuation => {
-                        self.state = State::Utf8Sequence(Some(decoder));
+                        self.state = State::Utf8Sequence(decoder);
                         Action::Ignore
                     }
-                    Utf8DecoderStatus::Done(c) => {
-                        self.state = State::Ground;
-                        Action::Print(c)
-                    }
-                    Utf8DecoderStatus::Error => {
-                        self.state = State::Ground;
-                        Action::InvalidUtf8
-                    }
+                    Utf8DecoderStatus::Done(c) => Action::Print(c),
+                    Utf8DecoderStatus::Error => Action::InvalidUtf8,
                 }
             }
+            State::Utf8Sequence(ref mut decoder) => match decoder.advance(byte) {
+                Utf8DecoderStatus::Continuation => Action::Ignore,
+                Utf8DecoderStatus::Done(c) => {
+                    self.state = State::Ground;
+                    Action::Print(c)
+                }
+                Utf8DecoderStatus::Error => {
+                    self.state = State::Ground;
+                    // A non-continuation byte starts fresh input.
+                    if (0x80..=0xbf).contains(&byte) {
+                        Action::InvalidUtf8
+                    } else {
+                        self.advance(byte)
+                    }
+                }
+            },
             State::EscapeSequence => {
                 if byte == 0x5b {
                     self.state = State::CSIStart;
@@ -220,8 +224,14 @@ impl Parser {
             },
             State::CSIArg1(value) => match byte {
                 0x30..=0x39 => {
-                    let value: usize = value.unwrap_or(0) * 10 + (byte - 0x30) as usize;
-                    self.state = State::CSIArg1(Some(value));
+                    self.state = match value
+                        .unwrap_or(0)
+                        .checked_mul(10)
+                        .and_then(|value| value.checked_add((byte - b'0') as usize))
+                    {
+                        Some(value) => State::CSIArg1(Some(value)),
+                        None => State::CSIIgnore,
+                    };
                     Action::Ignore
                 }
                 0x3b => {
@@ -234,10 +244,24 @@ impl Parser {
                 }
                 _ => Action::Ignore,
             },
+            State::CSIIgnore => {
+                if (0x40..=0x7e).contains(&byte) {
+                    self.state = State::Ground;
+                    Action::ControlSequenceIntroducer(CSI::Invalid)
+                } else {
+                    Action::Ignore
+                }
+            }
             State::CSIArg2(arg1, arg2) => match byte {
                 0x30..=0x39 => {
-                    let arg2: usize = arg2.unwrap_or(0) * 10 + (byte - 0x30) as usize;
-                    self.state = State::CSIArg2(arg1, Some(arg2));
+                    self.state = match arg2
+                        .unwrap_or(0)
+                        .checked_mul(10)
+                        .and_then(|value| value.checked_add((byte - b'0') as usize))
+                    {
+                        Some(arg2) => State::CSIArg2(arg1, Some(arg2)),
+                        None => State::CSIIgnore,
+                    };
                     Action::Ignore
                 }
                 0x40..=0x7e => {
@@ -263,6 +287,66 @@ pub(crate) mod tests {
             .into_iter()
             .map(|b| parser.advance(b))
             .collect()
+    }
+
+    #[test]
+    fn utf8_recovery() {
+        for prefix in [
+            &b"\xc0\x80"[..],
+            b"\xed\xa0\x80",
+            b"\xf4\x90\x80\x80",
+            b"\xe2\x82",
+        ] {
+            for (suffix, expected) in [
+                ("a", Action::Print(Utf8Char::from_str("a"))),
+                ("é", Action::Print(Utf8Char::from_str("é"))),
+                ("\x03", Action::ControlCharacter(CtrlC)),
+                ("\x1b[A", Action::ControlSequenceIntroducer(CSI::CUU(1))),
+            ] {
+                let mut parser = Parser::new();
+                for &byte in prefix {
+                    parser.advance(byte);
+                }
+                let actions: Vec<_> = input_sequence(&mut parser, suffix)
+                    .into_iter()
+                    .filter(|action| *action != Action::Ignore)
+                    .collect();
+                assert_eq!(actions, [expected], "{prefix:?} {suffix:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn overflow_recovery() {
+        for (suffix, expected) in [
+            ("\x03", Action::ControlCharacter(CtrlC)),
+            ("\x1b[A", Action::ControlSequenceIntroducer(CSI::CUU(1))),
+        ] {
+            let mut parser = Parser::new();
+            input_sequence(&mut parser, format!("\x1b[{}0", usize::MAX).as_str());
+            let actions: Vec<_> = input_sequence(&mut parser, suffix)
+                .into_iter()
+                .filter(|action| *action != Action::Ignore)
+                .collect();
+            assert_eq!(actions, [expected]);
+        }
+    }
+
+    #[test]
+    fn invalid_reports_and_overflow() {
+        for input in [
+            "\x1b[0;1R",
+            "\x1b[1;0R",
+            &format!("\x1b[{}0A", usize::MAX),
+            &format!("\x1b[1;{}0R", usize::MAX),
+        ] {
+            let mut parser = Parser::new();
+            assert_eq!(
+                input_sequence(&mut parser, input).last(),
+                Some(&Action::ControlSequenceIntroducer(CSI::Invalid))
+            );
+            assert_eq!(parser.advance(b'a'), Action::Print(Utf8Char::from_str("a")));
+        }
     }
 
     #[test]

@@ -1,103 +1,18 @@
-//! Line editor for synchronous IO.
-//!
-//! The editor takes a struct implementing the [`embedded_io::Read`] and [`embedded_io::Write`]
-//! traits.
-//!
-//! Use the [`crate::builder::EditorBuilder`] to build an editor.
+//! Synchronous IO for the editor.
+
 use embedded_io::{Read, ReadExactError, Write};
 
-use crate::error::NolineError;
+use crate::{
+    core::Prompt,
+    editor::Editor,
+    error::NolineError,
+    history::History,
+    line_buffer::Buffer,
+    output::{Output, OutputItem},
+};
 
-use crate::history::{get_history_entries, CircularSlice, History};
-use crate::line_buffer::{Buffer, LineBuffer};
-
-use crate::core::{Line, Prompt};
-use crate::output::{Output, OutputItem};
-use crate::terminal::Terminal;
-
-/// Line editor for synchronous IO
-///
-/// It is recommended to use [`crate::builder::EditorBuilder`] to build an Editor.
-pub struct Editor<B, H>
-where
-    B: Buffer,
-    H: History,
-{
-    buffer: LineBuffer<B>,
-    terminal: Terminal,
-    history: H,
-}
-
-impl<E> From<E> for NolineError
-where
-    E: embedded_io::Error,
-{
-    fn from(value: E) -> Self {
-        NolineError::IoError(value.kind())
-    }
-}
-
-impl<B, H> Editor<B, H>
-where
-    B: Buffer,
-    H: History,
-{
-    /// Create and initialize line editor
-    pub fn new<IO: Read + Write>(
-        buffer: LineBuffer<B>,
-        history: H,
-        _io: &mut IO,
-    ) -> Result<Self, NolineError> {
-        let terminal = Terminal::default();
-
-        Ok(Self {
-            buffer,
-            terminal,
-            history,
-        })
-    }
-
-    fn handle_output<'a, 'item, IO, I>(
-        output: Output<'a, B, I>,
-        io: &mut IO,
-    ) -> Result<Option<()>, NolineError>
-    where
-        IO: Read + Write,
-        I: Iterator<Item = &'item str> + Clone,
-    {
-        for item in output {
-            if let Some(bytes) = item.get_bytes() {
-                io.write(bytes)?;
-            }
-
-            io.flush()?;
-
-            match item {
-                OutputItem::EndOfString => return Ok(Some(())),
-                OutputItem::Abort => return Err(NolineError::Aborted),
-                _ => (),
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn read_byte<IO>(io: &mut IO) -> Result<u8, NolineError>
-    where
-        IO: Read + Write,
-    {
-        let mut buf = [0x8; 1];
-
-        match io.read_exact(&mut buf) {
-            Ok(_) => Ok(buf[0]),
-            Err(err) => match err {
-                ReadExactError::UnexpectedEof => Err(NolineError::Aborted),
-                ReadExactError::Other(err) => Err(err)?,
-            },
-        }
-    }
-
-    /// Read line from `stdin`
+impl<B: Buffer, H: History> Editor<B, H> {
+    /// Read a line from the supplied I/O
     pub fn readline<'a, 'item, IO, I>(
         &'a mut self,
         prompt: impl Into<Prompt<I>>,
@@ -107,47 +22,49 @@ where
         IO: Read + Write,
         I: Iterator<Item = &'item str> + Clone,
     {
-        let mut line = Line::new(
-            prompt,
-            &mut self.buffer,
-            &mut self.terminal,
-            &mut self.history,
-        );
-
-        let mut reset = line.reset();
-
-        Self::handle_output(reset.start(), io)?;
+        let mut line = self.session(prompt);
+        handle_output(line.start(), io)?;
 
         loop {
-            let byte = Self::read_byte(io)?;
+            let mut byte = [0];
+            io.read_exact(&mut byte).map_err(|error| match error {
+                ReadExactError::UnexpectedEof => NolineError::Aborted,
+                ReadExactError::Other(error) => error.into(),
+            })?;
 
-            if let Some(output) = reset.advance(byte) {
-                Self::handle_output(output, io)?;
-            } else {
-                break;
-            }
-        }
-
-        loop {
-            let byte = Self::read_byte(io)?;
-
-            if Self::handle_output(line.advance(byte), io)?.is_some() {
+            if handle_output(line.advance(byte[0]), io)? {
                 break;
             }
         }
 
         Ok(self.buffer.as_str())
     }
+}
 
-    /// Load history from iterator
-    pub fn load_history<'a>(&mut self, entries: impl Iterator<Item = &'a str>) -> usize {
-        self.history.load_entries(entries)
+fn handle_output<'a, 'item, B, IO, I>(
+    output: Output<'a, B, I>,
+    io: &mut IO,
+) -> Result<bool, NolineError>
+where
+    B: Buffer,
+    IO: Write,
+    I: Iterator<Item = &'item str> + Clone,
+{
+    for item in output {
+        if let Some(bytes) = item.get_bytes() {
+            io.write_all(bytes)?;
+        }
+
+        io.flush()?;
+
+        match item {
+            OutputItem::EndOfString => return Ok(true),
+            OutputItem::Abort => return Err(NolineError::Aborted),
+            _ => (),
+        }
     }
 
-    /// Get history as iterator over circular slices
-    pub fn get_history(&self) -> impl Iterator<Item = CircularSlice<'_>> {
-        get_history_entries(&self.history)
-    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -228,6 +145,7 @@ pub mod tests {
 
     impl embedded_io::Write for MockIO {
         fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            let buf = &buf[..buf.len().min(1)];
             self.stdout.buffer.extend(buf);
             Ok(buf.len())
         }
@@ -243,7 +161,7 @@ pub mod tests {
 
     impl core::fmt::Write for MockIO {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            self.write(s.as_bytes()).or(Err(core::fmt::Error))?;
+            self.write_all(s.as_bytes()).or(Err(core::fmt::Error))?;
             Ok(())
         }
     }
@@ -256,7 +174,7 @@ pub mod tests {
         let mut io = MockIO::new(MockStdin::new(input_rx), MockStdout::new(output_tx));
 
         let handle = thread::spawn(move || {
-            let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
+            let mut editor = EditorBuilder::new_unbounded().build();
 
             if let Ok(s) = editor.readline("> ", &mut io) {
                 Some(s.to_string())
@@ -329,8 +247,7 @@ pub mod tests {
                         let mut io = MockIO::new(stdin, stdout);
                         let mut editor = EditorBuilder::new_unbounded()
                             .with_unbounded_history()
-                            .build_sync(&mut io)
-                            .unwrap();
+                            .build();
 
                         while let Ok(s) = editor.readline(prompt, &mut io) {
                             string_tx.send(s.to_string()).unwrap();
