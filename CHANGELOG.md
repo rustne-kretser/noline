@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix panic on missing CPR arguments.
 - Reject malformed UTF-8 and recover interrupted input.
 - Restore wrapped UTF-8 history safely; reject oversized entries.
+- Preserve terminal output when I/O accepts partial writes.
 
 ## [0.5.1 - 2026-03-31]
 
