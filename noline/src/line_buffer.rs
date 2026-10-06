@@ -86,13 +86,12 @@ impl<B: Buffer> LineBuffer<B> {
             .map(|((start, c), (end, _))| (start..end, c))
     }
 
-    fn get_byte_position(&self, char_index: usize) -> usize {
+    pub(crate) fn get_byte_position(&self, char_index: usize) -> usize {
         let s = self.as_str();
 
         s.char_indices()
-            .skip(char_index)
+            .nth(char_index)
             .map(|(pos, _)| pos)
-            .next()
             .unwrap_or(s.len())
     }
 

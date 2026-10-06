@@ -391,14 +391,6 @@ where
     }
 }
 
-fn byte_position(s: &str, char_pos: usize) -> usize {
-    s.char_indices()
-        .skip(char_pos)
-        .map(|(pos, _)| pos)
-        .next()
-        .unwrap_or(s.len())
-}
-
 pub struct Output<'a, B: Buffer, I> {
     prompt: &'a Prompt<I>,
     buffer: &'a LineBuffer<B>,
@@ -437,7 +429,7 @@ where
         let offset = self.offset_from_position(position);
         let s = self.buffer.as_str();
 
-        let pos = byte_position(s, offset);
+        let pos = self.buffer.get_byte_position(offset);
 
         &s[pos..]
     }
