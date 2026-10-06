@@ -195,19 +195,10 @@ where
             Err(())
         };
 
-        if let Ok(entry) = entry {
-            let (slice1, slice2) = entry.get_slices();
-
-            self.buffer.truncate();
-            unsafe {
-                self.buffer.insert_bytes(0, slice1).unwrap();
-                self.buffer.insert_bytes(slice1.len(), slice2).unwrap();
-            }
-
-            self.generate_output(ClearAndPrintBuffer)
-        } else {
-            self.generate_output(RingBell)
-        }
+        let action = entry
+            .and_then(|entry| self.buffer.restore_history(entry))
+            .map_or(RingBell, |_| ClearAndPrintBuffer);
+        self.generate_output(action)
     }
 
     fn history_move_down(&mut self) -> Output<'_, B, I> {
@@ -217,20 +208,16 @@ where
             return self.generate_output(RingBell);
         };
 
-        if let Ok(entry) = entry {
-            let (slice1, slice2) = entry.get_slices();
-
-            self.buffer.truncate();
-            unsafe {
-                self.buffer.insert_bytes(0, slice1).unwrap();
-                self.buffer.insert_bytes(slice1.len(), slice2).unwrap();
-            }
+        let action = if let Ok(entry) = entry {
+            self.buffer
+                .restore_history(entry)
+                .map_or(RingBell, |_| ClearAndPrintBuffer)
         } else {
             self.nav.reset();
             self.buffer.truncate();
-        }
-
-        self.generate_output(ClearAndPrintBuffer)
+            ClearAndPrintBuffer
+        };
+        self.generate_output(action)
     }
 
     // Advance state machine by one byte. Returns output iterator over
@@ -375,6 +362,23 @@ pub(crate) mod tests {
     use crate::testlib::{csi, MockTerminal, ToByteVec};
 
     use super::*;
+
+    #[test]
+    fn oversized_history() {
+        let mut storage = [0; 2];
+        let mut entries = [0; 32];
+        let mut history = SliceHistory::new(&mut entries);
+        history.load_entries(["ok", "too long"].into_iter());
+        let mut editor = Editor::new(LineBuffer::from_slice(&mut storage), history);
+        let mut terminal = MockTerminal::new(4, 80, Cursor::new(0, 0));
+        let mut line = editor.get_line("> ", &mut terminal);
+        assert_eq!(advance(&mut terminal, &mut line, "\x10"), Err(()));
+        assert_eq!(line.buffer.as_str(), "");
+        advance(&mut terminal, &mut line, "\x10").unwrap();
+        assert_eq!(line.buffer.as_str(), "ok");
+        assert_eq!(advance(&mut terminal, &mut line, "\x0e"), Err(()));
+        assert_eq!(line.buffer.as_str(), "ok");
+    }
 
     #[test]
     fn multibyte_prompt() {
