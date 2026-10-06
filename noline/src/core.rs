@@ -192,6 +192,17 @@ where
         pos - self.prompt.len()
     }
 
+    fn delete_forward(&mut self) -> Output<'_, B, I> {
+        let pos = self.current_position();
+        let action = if self.buffer.as_str().chars().nth(pos).is_some() {
+            self.buffer.delete(pos);
+            EraseAndPrintBuffer
+        } else {
+            RingBell
+        };
+        self.generate_output(action)
+    }
+
     fn history_move_up(&mut self) -> Output<'_, B, I> {
         let entry = if self.nav.is_active() {
             self.nav.move_up()
@@ -249,23 +260,8 @@ where
                 CtrlA => self.generate_output(MoveCursor(CursorMove::Start)),
                 CtrlB => self.generate_output(MoveCursor(CursorMove::Back)),
                 CtrlC => self.generate_output(Abort),
-                CtrlD => {
-                    let len = self.buffer.len();
-
-                    if len > 0 {
-                        let pos = self.current_position();
-
-                        if pos < len {
-                            self.buffer.delete(pos);
-
-                            self.generate_output(EraseAndPrintBuffer)
-                        } else {
-                            self.generate_output(RingBell)
-                        }
-                    } else {
-                        self.generate_output(Abort)
-                    }
-                }
+                CtrlD if self.buffer.len() == 0 => self.generate_output(Abort),
+                CtrlD => self.delete_forward(),
                 CtrlE => self.generate_output(MoveCursor(CursorMove::End)),
                 CtrlF => self.generate_output(MoveCursor(CursorMove::Forward)),
                 CtrlK => {
@@ -322,18 +318,7 @@ where
                 CSI::CUF(_) => self.generate_output(MoveCursor(CursorMove::Forward)),
                 CSI::CUB(_) => self.generate_output(MoveCursor(CursorMove::Back)),
                 CSI::Home => self.generate_output(MoveCursor(CursorMove::Start)),
-                CSI::Delete => {
-                    let len = self.buffer.len();
-                    let pos = self.current_position();
-
-                    if pos < len {
-                        self.buffer.delete(pos);
-
-                        self.generate_output(EraseAndPrintBuffer)
-                    } else {
-                        self.generate_output(RingBell)
-                    }
-                }
+                CSI::Delete => self.delete_forward(),
                 CSI::End => self.generate_output(MoveCursor(CursorMove::End)),
                 CSI::CPR(_, _) => self.generate_output(Nothing),
                 CSI::Unknown(_) => self.generate_output(RingBell),
@@ -365,6 +350,21 @@ pub(crate) mod tests {
     use crate::testlib::{csi, MockTerminal, ToByteVec};
 
     use super::*;
+
+    #[test]
+    fn delete_at_unicode_end() {
+        for key in ["\x04", "\x1b[3~"] {
+            let (mut terminal, mut editor) = get_terminal_and_editor(4, 80, Cursor::new(0, 0));
+            let mut line = editor.get_line("> ", &mut terminal);
+            advance(&mut terminal, &mut line, "é").unwrap();
+            assert_eq!(advance(&mut terminal, &mut line, key), Err(()));
+            advance(&mut terminal, &mut line, "\x02").unwrap();
+            advance(&mut terminal, &mut line, key).unwrap();
+            advance(&mut terminal, &mut line, "x").unwrap();
+            assert_eq!(line.buffer.as_str(), "x");
+            assert_eq!(terminal.current_line_as_string(), "> x");
+        }
+    }
 
     #[test]
     fn oversized_history() {
