@@ -384,6 +384,15 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn submit_below_wrapped_draft() {
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 4, Cursor::new(0, 0));
+        let mut line = editor.get_line("> ", &mut terminal);
+        advance(&mut terminal, &mut line, "abcdefgh\x01\r").unwrap();
+        assert_eq!(terminal.get_cursor(), Cursor::new(3, 0));
+        assert_eq!(terminal.screen_as_string(), "> ab\ncdef\ngh");
+    }
+
+    #[test]
     fn multibyte_prompt() {
         let (mut terminal, mut editor) = get_terminal_and_editor(4, 80, Cursor::new(0, 0));
         let mut line = editor.get_line("é> ", &mut terminal);

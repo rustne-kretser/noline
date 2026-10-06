@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve terminal output when I/O accepts partial writes.
 - Avoid empty history entries at the circular buffer boundary.
 - Handle invalid or large terminal reports without panicking.
+- Start command output below the entire submitted line.
 
 ## [0.5.1 - 2026-03-31]
 

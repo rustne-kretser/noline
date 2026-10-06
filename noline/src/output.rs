@@ -584,7 +584,13 @@ where
                 pack([SavePosition, MoveCursorToEdge, GetPosition, RestorePosition])
             }
 
-            OutputAction::Done => pack([Newline, EndOfString]),
+            OutputAction::Done => pack([
+                Move(MoveCursorToPosition::new(
+                    self.new_position(CursorMove::End),
+                )),
+                Newline,
+                EndOfString,
+            ]),
             OutputAction::Abort => pack([Newline, Abort]),
             OutputAction::Nothing => pack([]),
         };
