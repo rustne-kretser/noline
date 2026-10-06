@@ -408,7 +408,7 @@ mod alloc {
 
     impl History for UnboundedHistory {
         fn get_entry(&self, index: usize) -> Option<CircularSlice<'_>> {
-            let s = self.buffer[index].as_str();
+            let s = self.buffer.get(index)?.as_str();
 
             Some(CircularSlice::new(s.as_bytes(), 0, s.len(), s.len()))
         }
@@ -448,6 +448,18 @@ mod tests {
                 })
                 .collect()
         }
+    }
+
+    #[test]
+    fn unbounded_lookup() {
+        let mut history = UnboundedHistory::new();
+        assert!(history.get_entry(0).is_none());
+        history.add_entry("é").unwrap();
+        assert!(history.get_entry(1).is_none());
+        assert_eq!(
+            Vec::<String>::from_iter(get_history_entries(&history)),
+            ["é"]
+        );
     }
 
     #[test]
