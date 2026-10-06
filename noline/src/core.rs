@@ -52,12 +52,12 @@ where
         match action {
             Action::ControlSequenceIntroducer(CSI::CPR(x, y)) => match self.state {
                 ResetState::New => panic!("Invalid state"),
-                ResetState::GetSize => {
+                ResetState::GetSize if Terminal::try_new(x, y, 0).is_some() => {
                     self.line.terminal.resize(x, y);
                     self.state = ResetState::GetPosition;
                     Some(self.line.generate_output(ClearAndPrintPrompt))
                 }
-                ResetState::GetPosition => {
+                ResetState::GetPosition if self.line.terminal.contains(x - 1, y - 1) => {
                     #[cfg(test)]
                     dbg!(x, y);
                     self.line.terminal.reset(Cursor::new(x - 1, y - 1));
@@ -65,9 +65,16 @@ where
                     None
                 }
                 ResetState::Done => panic!("Invalid state"),
+                _ => {
+                    self.state = ResetState::Done;
+                    Some(self.line.generate_output(Abort))
+                }
             },
             Action::Ignore => Some(self.line.generate_output(Nothing)),
-            _ => None,
+            _ => {
+                self.state = ResetState::Done;
+                Some(self.line.generate_output(Abort))
+            }
         }
     }
 }
@@ -328,11 +335,7 @@ where
                     }
                 }
                 CSI::End => self.generate_output(MoveCursor(CursorMove::End)),
-                CSI::CPR(row, column) => {
-                    let cursor = Cursor::new(row - 1, column - 1);
-                    self.terminal.reset(cursor);
-                    self.generate_output(Nothing)
-                }
+                CSI::CPR(_, _) => self.generate_output(Nothing),
                 CSI::Unknown(_) => self.generate_output(RingBell),
                 CSI::CUU(_) => self.history_move_up(),
                 CSI::CUD(_) => self.history_move_down(),

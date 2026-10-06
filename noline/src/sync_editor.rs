@@ -250,6 +250,28 @@ pub mod tests {
     }
 
     #[test]
+    fn invalid_geometry_recovers() {
+        for report in [
+            std::format!("\x1b[{};1R", usize::MAX),
+            "\x1b[4;20R\x1b[5;1R".into(),
+        ] {
+            let (tx, rx) = unbounded();
+            let (output_tx, _output_rx) = unbounded();
+            let mut io = MockIO::new(MockStdin::new(rx), MockStdout::new(output_tx));
+            for byte in (report + "\x1b[4;20R\x1b[1;3Rok\r").bytes() {
+                tx.send(byte).unwrap();
+            }
+            drop(tx);
+            let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
+            assert!(matches!(
+                editor.readline("> ", &mut io),
+                Err(crate::error::NolineError::Aborted)
+            ));
+            assert_eq!(editor.readline("> ", &mut io).unwrap(), "ok");
+        }
+    }
+
+    #[test]
     fn simple_test() {
         let (input_tx, input_rx) = unbounded();
         let (output_tx, output_rx) = unbounded();
