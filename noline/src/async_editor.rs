@@ -50,21 +50,22 @@ where
         IO: embedded_io_async::Read + embedded_io_async::Write,
         I: Iterator<Item = &'item str> + Clone,
     {
+        let mut result = None;
         for item in output {
             if let Some(bytes) = item.get_bytes() {
                 io.write_all(bytes).await?;
             }
 
-            io.flush().await?;
-
-            match item {
-                OutputItem::EndOfString => return Ok(Some(())),
-                OutputItem::Abort => return Err(NolineError::Aborted),
-                _ => (),
-            }
+            result = Some(match item {
+                OutputItem::EndOfString => Ok(Some(())),
+                OutputItem::Abort => Err(NolineError::Aborted),
+                _ => Ok(None),
+            });
         }
-
-        Ok(None)
+        if result.is_some() {
+            io.flush().await?;
+        }
+        result.unwrap_or(Ok(None))
     }
 
     async fn read_byte<IO>(io: &mut IO) -> Result<u8, NolineError>
