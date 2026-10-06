@@ -31,6 +31,8 @@ Noline comes with multiple implemenations:
 - [`sync_editor::Editor`] – Editor for synchronous IO
 - [`async_editor::Editor`] - Editor for asynchronous IO
 
+Both offer `line(prompt)` for application-managed editing.
+
 Editors can be built using [`builder::EditorBuilder`].
 
 ## Example

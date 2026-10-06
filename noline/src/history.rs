@@ -326,14 +326,14 @@ impl History for NoHistory {
     }
 }
 
-/// Wrapper used for history navigation in [`core::Line`]
-pub(crate) struct HistoryNavigator<'a, H: History> {
-    pub(crate) history: &'a mut H,
+/// History and its current navigation position.
+pub(crate) struct HistoryNavigator<H: History> {
+    pub(crate) history: H,
     position: Option<usize>,
 }
 
-impl<'a, H: History> HistoryNavigator<'a, H> {
-    pub(crate) fn new(history: &'a mut H) -> Self {
+impl<H: History> HistoryNavigator<H> {
+    pub(crate) fn new(history: H) -> Self {
         Self {
             history,
             position: None,
@@ -617,8 +617,7 @@ mod tests {
 
     #[test]
     fn navigator() {
-        let mut history = UnboundedHistory::new();
-        let mut navigator = HistoryNavigator::new(&mut history);
+        let mut navigator = HistoryNavigator::new(UnboundedHistory::new());
 
         assert!(navigator.move_up().is_err());
         assert!(navigator.move_down().is_err());

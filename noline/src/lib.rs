@@ -25,6 +25,8 @@
 //! - [`sync_editor::Editor`] – Editor for synchronous IO
 //! - [`async_editor::Editor`] - Editor for asynchronous IO
 //!
+//! Both offer `line(prompt)` for application-managed editing.
+//!
 //! Editors can be built using [`builder::EditorBuilder`].
 //!
 //! # Example
@@ -66,6 +68,7 @@
 pub mod async_editor;
 pub mod builder;
 mod core;
+pub mod editor;
 pub mod error;
 pub mod history;
 mod input;

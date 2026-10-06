@@ -7,19 +7,46 @@ use crate::{
 };
 
 #[cfg_attr(test, derive(Debug))]
-pub enum OutputItem<'a> {
+enum Item<'a> {
     Slice(&'a [u8]),
     UintToBytes(UintToBytes<{ usize::MAX.ilog10() as usize + 1 }>),
     EndOfString,
     Abort,
 }
 
-impl<'a> OutputItem<'a> {
+impl Item<'_> {
     pub fn get_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::Slice(slice) => Some(slice),
             Self::UintToBytes(uint) => Some(uint.as_bytes()),
             Self::EndOfString | Self::Abort => None,
+        }
+    }
+}
+
+/// Terminal bytes or a completed editing operation.
+#[cfg_attr(test, derive(Debug))]
+pub struct OutputItem<'a>(Item<'a>);
+
+/// Outcome of editing a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    Submitted,
+    Aborted,
+}
+
+impl OutputItem<'_> {
+    /// Bytes to write before advancing the output iterator.
+    pub fn get_bytes(&self) -> Option<&[u8]> {
+        self.0.get_bytes()
+    }
+
+    /// Line outcome, delivered after its terminal output.
+    pub fn event(&self) -> Option<Event> {
+        match self.0 {
+            Item::EndOfString => Some(Event::Submitted),
+            Item::Abort => Some(Event::Aborted),
+            _ => None,
         }
     }
 }
@@ -37,6 +64,7 @@ pub enum CursorMove {
 #[derive(Copy, Clone)]
 pub enum OutputAction {
     Nothing,
+    PrintPrompt,
     MoveCursor(CursorMove),
     ClearAndPrintPrompt,
     ClearAndPrintBuffer,
@@ -112,26 +140,26 @@ impl MoveCursor {
 }
 
 impl Iterator for MoveCursor {
-    type Item = OutputItem<'static>;
+    type Item = Item<'static>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.state {
                 MoveCursorState::ScrollPrefix => {
                     self.state = MoveCursorState::Scroll;
-                    break Some(OutputItem::Slice("\x1b[".as_bytes()));
+                    break Some(Item::Slice("\x1b[".as_bytes()));
                 }
                 MoveCursorState::Scroll => {
                     self.state = MoveCursorState::ScrollFinalByte;
 
-                    break Some(OutputItem::UintToBytes(
+                    break Some(Item::UintToBytes(
                         UintToBytes::from_uint(self.scroll.unsigned_abs()).unwrap(),
                     ));
                 }
                 MoveCursorState::ScrollFinalByte => {
                     self.state = MoveCursorState::MovePrefix;
 
-                    break Some(OutputItem::Slice(if self.scroll > 0 {
+                    break Some(Item::Slice(if self.scroll > 0 {
                         "S".as_bytes()
                     } else {
                         "T".as_bytes()
@@ -147,28 +175,28 @@ impl Iterator for MoveCursor {
                 }
                 MoveCursorState::MovePrefix => {
                     self.state = MoveCursorState::Row;
-                    break Some(OutputItem::Slice("\x1b[".as_bytes()));
+                    break Some(Item::Slice("\x1b[".as_bytes()));
                 }
                 MoveCursorState::Row => {
                     self.state = MoveCursorState::Separator;
-                    break Some(OutputItem::UintToBytes(
+                    break Some(Item::UintToBytes(
                         UintToBytes::from_uint(self.cursor.row + 1).unwrap(),
                     ));
                 }
                 MoveCursorState::Separator => {
                     self.state = MoveCursorState::Column;
-                    break Some(OutputItem::Slice(";".as_bytes()));
+                    break Some(Item::Slice(";".as_bytes()));
                 }
                 MoveCursorState::Column => {
                     self.state = MoveCursorState::MoveFinalByte;
 
-                    break Some(OutputItem::UintToBytes(
+                    break Some(Item::UintToBytes(
                         UintToBytes::from_uint(self.cursor.column + 1).unwrap(),
                     ));
                 }
                 MoveCursorState::MoveFinalByte => {
                     self.state = MoveCursorState::Done;
-                    break Some(OutputItem::Slice("H".as_bytes()));
+                    break Some(Item::Slice("H".as_bytes()));
                 }
                 MoveCursorState::Done => break None,
             }
@@ -291,16 +319,12 @@ where
     I: Iterator<Item = &'item str>,
     'item: 'a,
 {
-    fn transition(
-        &mut self,
-        new_state: Step<'a, I>,
-        output: OutputItem<'a>,
-    ) -> Option<OutputItem<'a>> {
+    fn transition(&mut self, new_state: Step<'a, I>, output: Item<'a>) -> Option<Item<'a>> {
         *self = new_state;
         Some(output)
     }
 
-    fn advance(&mut self, terminal: &mut Terminal) -> Option<OutputItem<'a>> {
+    fn advance(&mut self, terminal: &mut Terminal) -> Option<Item<'a>> {
         match self {
             Print(printable) => {
                 if let Some(item) = printable.next_item(terminal.columns_remaining()) {
@@ -314,7 +338,7 @@ where
                         PrintableItem::Newline => "\n\r",
                     };
 
-                    Some(OutputItem::Slice(s.as_bytes()))
+                    Some(Item::Slice(s.as_bytes()))
                 } else {
                     *self = Step::Done;
                     None
@@ -330,27 +354,27 @@ where
                 *self = Step::Done;
                 None
             }
-            MoveCursorToEdge => self.transition(Step::Done, OutputItem::Slice(b"\x1b[999;999H")),
-            Erase => self.transition(Step::Done, OutputItem::Slice("\x1b[J".as_bytes())),
+            MoveCursorToEdge => self.transition(Step::Done, Item::Slice(b"\x1b[999;999H")),
+            Erase => self.transition(Step::Done, Item::Slice("\x1b[J".as_bytes())),
             Newline => {
                 let mut position = terminal.get_position();
                 position.row += 1;
                 position.column = 0;
                 terminal.move_cursor(position);
 
-                self.transition(Step::Done, OutputItem::Slice("\n\r".as_bytes()))
+                self.transition(Step::Done, Item::Slice("\n\r".as_bytes()))
             }
-            Bell => self.transition(Step::Done, OutputItem::Slice("\x07".as_bytes())),
-            EndOfString => self.transition(Step::Done, OutputItem::EndOfString),
-            Abort => self.transition(Step::Done, OutputItem::Abort),
+            Bell => self.transition(Step::Done, Item::Slice("\x07".as_bytes())),
+            EndOfString => self.transition(Step::Done, Item::EndOfString),
+            Abort => self.transition(Step::Done, Item::Abort),
             ClearLine => {
                 terminal.move_cursor_to_start_of_line();
 
-                self.transition(Step::Done, OutputItem::Slice("\r\x1b[J".as_bytes()))
+                self.transition(Step::Done, Item::Slice("\r\x1b[J".as_bytes()))
             }
-            GetPosition => self.transition(Step::Done, OutputItem::Slice("\x1b[6n".as_bytes())),
-            SavePosition => self.transition(Step::Done, OutputItem::Slice(b"\x1b7")),
-            RestorePosition => self.transition(Step::Done, OutputItem::Slice(b"\x1b8")),
+            GetPosition => self.transition(Step::Done, Item::Slice("\x1b[6n".as_bytes())),
+            SavePosition => self.transition(Step::Done, Item::Slice(b"\x1b7")),
+            RestorePosition => self.transition(Step::Done, Item::Slice(b"\x1b8")),
             Done => None,
         }
     }
@@ -377,7 +401,7 @@ where
             if let Some(step) = self.steps.get_mut(self.pos) {
                 if let Some(step) = step.as_mut() {
                     if let Some(item) = step.advance(self.terminal) {
-                        break Some(item);
+                        break Some(OutputItem(item));
                     } else {
                         self.pos += 1;
                     }
@@ -391,6 +415,7 @@ where
     }
 }
 
+#[must_use = "drain and write the output before the next editing operation"]
 pub struct Output<'a, B: Buffer, I> {
     prompt: &'a Prompt<I>,
     buffer: &'a LineBuffer<B>,
@@ -403,7 +428,7 @@ where
     B: Buffer,
     I: Iterator<Item = &'item str> + Clone,
 {
-    pub fn new(
+    pub(crate) fn new(
         prompt: &'a Prompt<I>,
         buffer: &'a LineBuffer<B>,
         terminal: &'a mut Terminal,
@@ -485,6 +510,9 @@ where
         }
 
         let steps = match self.action {
+            OutputAction::PrintPrompt => {
+                pack([ClearLine, Print(Printable::from_iter(self.prompt.iter()))])
+            }
             OutputAction::MoveCursor(cursor_move) => {
                 let position = self.new_position(cursor_move);
 

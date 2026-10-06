@@ -8,11 +8,11 @@ use embedded_io::{Read, ReadExactError, Write};
 
 use crate::error::NolineError;
 
-use crate::history::{get_history_entries, CircularSlice, History};
+use crate::history::{get_history_entries, CircularSlice, History, HistoryNavigator};
 use crate::line_buffer::{Buffer, LineBuffer};
 
 use crate::core::{Line, Prompt};
-use crate::output::{Output, OutputItem};
+use crate::output::{Event, Output};
 use crate::terminal::Terminal;
 
 /// Line editor for synchronous IO
@@ -25,7 +25,7 @@ where
 {
     buffer: LineBuffer<B>,
     terminal: Terminal,
-    history: H,
+    nav: HistoryNavigator<H>,
 }
 
 impl<E> From<E> for NolineError
@@ -42,7 +42,7 @@ where
     B: Buffer,
     H: History,
 {
-    /// Create and initialize line editor
+    /// Create an editor. Terminal initialization occurs when starting a line.
     pub fn new<IO: Read + Write>(
         buffer: LineBuffer<B>,
         history: H,
@@ -53,7 +53,7 @@ where
         Ok(Self {
             buffer,
             terminal,
-            history,
+            nav: HistoryNavigator::new(history),
         })
     }
 
@@ -71,9 +71,9 @@ where
                 io.write_all(bytes)?;
             }
 
-            result = Some(match item {
-                OutputItem::EndOfString => Ok(Some(())),
-                OutputItem::Abort => Err(NolineError::Aborted),
+            result = Some(match item.event() {
+                Some(Event::Submitted) => Ok(Some(())),
+                Some(Event::Aborted) => Err(NolineError::Aborted),
                 _ => Ok(None),
             });
         }
@@ -98,7 +98,15 @@ where
         }
     }
 
-    /// Read line from `stdin`
+    /// Borrow a line for application-driven editing. Start it before feeding input.
+    pub fn line<'item, I>(&mut self, prompt: impl Into<Prompt<I>>) -> Line<'_, B, H, I>
+    where
+        I: Iterator<Item = &'item str> + Clone,
+    {
+        Line::new(prompt, &mut self.buffer, &mut self.terminal, &mut self.nav)
+    }
+
+    /// Read a line from the supplied I/O.
     pub fn readline<'a, 'item, IO, I>(
         &'a mut self,
         prompt: impl Into<Prompt<I>>,
@@ -108,26 +116,8 @@ where
         IO: Read + Write,
         I: Iterator<Item = &'item str> + Clone,
     {
-        let mut line = Line::new(
-            prompt,
-            &mut self.buffer,
-            &mut self.terminal,
-            &mut self.history,
-        );
-
-        let mut reset = line.reset();
-
-        Self::handle_output(reset.start(), io)?;
-
-        loop {
-            let byte = Self::read_byte(io)?;
-
-            if let Some(output) = reset.advance(byte) {
-                Self::handle_output(output, io)?;
-            } else {
-                break;
-            }
-        }
+        let mut line = self.line(prompt);
+        Self::handle_output(line.start(), io)?;
 
         loop {
             let byte = Self::read_byte(io)?;
@@ -142,12 +132,12 @@ where
 
     /// Load history from iterator
     pub fn load_history<'a>(&mut self, entries: impl Iterator<Item = &'a str>) -> usize {
-        self.history.load_entries(entries)
+        self.nav.history.load_entries(entries)
     }
 
     /// Get history as iterator over circular slices
     pub fn get_history(&self) -> impl Iterator<Item = CircularSlice<'_>> {
-        get_history_entries(&self.history)
+        get_history_entries(&self.nav.history)
     }
 }
 
@@ -297,6 +287,35 @@ pub mod tests {
     }
 
     #[test]
+    fn prompts_borrow_per_line() {
+        let mut io = MockIO::new(
+            MockStdin::new(unbounded().1),
+            MockStdout::new(unbounded().0),
+        );
+        let mut editor = EditorBuilder::new_unbounded()
+            .with_unbounded_history()
+            .build_sync(&mut io)
+            .unwrap();
+        for text in ["first", "second"] {
+            let prompt = std::format!("{text}> ");
+            let mut line = editor.line(prompt.as_str());
+            line.start_at(4, 80, 0).unwrap().into_vec();
+            if text == "second" {
+                line.advance(0x10).into_vec();
+                assert_eq!(line.as_str(), "first");
+                line.advance(0x0e).into_vec();
+            }
+            for byte in text.bytes().chain([b'\r']) {
+                line.advance(byte).into_iter().for_each(drop);
+            }
+            let input = line.into_str();
+            drop(prompt);
+            assert_eq!(input, text);
+        }
+        assert_eq!(editor.get_history().count(), 2);
+    }
+
+    #[test]
     fn simple_test() {
         let (input_tx, input_rx) = unbounded();
         let (output_tx, output_rx) = unbounded();
@@ -306,7 +325,11 @@ pub mod tests {
         let handle = thread::spawn(move || {
             let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
 
-            if let Ok(s) = editor.readline("> ", &mut io) {
+            let result = {
+                let prompt = std::string::String::from("> ");
+                editor.readline(prompt.as_str(), &mut io)
+            };
+            if let Ok(s) = result {
                 Some(s.to_string())
             } else {
                 None

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Incremental editing with application-managed I/O and terminal initialization.
+
 ### Fixed
 
 - Fix cursor positioning with multibyte prompts.
