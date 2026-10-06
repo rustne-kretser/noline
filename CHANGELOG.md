@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Incremental editing with application-managed I/O and terminal initialization.
+- UTF-8 cursor offsets and range replacement for application-provided completion.
 
 ### Fixed
 

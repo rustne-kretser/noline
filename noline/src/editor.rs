@@ -9,7 +9,7 @@
 //! updates the editor's cursor state. After interrupted output or a disconnect,
 //! restore the terminal to a state that accepts commands, then start a new line.
 //!
-//! Each line borrows its prompt. Cursor positions use UTF-8 byte offsets.
+//! Each line borrows its prompt. Cursor and replacement ranges use UTF-8 byte offsets.
 //! Display positioning assumes one cell per Unicode scalar; wide and combining
 //! characters are not supported.
 //!
@@ -40,9 +40,11 @@
 pub use crate::core::{Line, Prompt, StrIter};
 pub use crate::output::{Event, Output, OutputItem};
 
-/// Invalid terminal geometry.
+/// Invalid editing operation or terminal geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    /// The operation is not available in the current editing phase.
+    InvalidState,
     /// Terminal dimensions or cursor row are invalid.
     InvalidGeometry,
 }
