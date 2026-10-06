@@ -15,8 +15,9 @@ use OutputAction::*;
 
 enum LineState {
     New,
-    GetSize,
-    GetPosition,
+    GetSize { cursor: usize, parser: Parser },
+    GetPosition { cursor: usize, parser: Parser },
+    Suspended(usize),
     Editing,
     Finished,
 }
@@ -115,13 +116,28 @@ where
         }
     }
 
+    /// Change the prompt between lines or while suspended. No output is generated.
+    pub fn set_prompt(&mut self, prompt: impl Into<Prompt<I>>) -> Result<(), Error> {
+        if !matches!(
+            self.state,
+            LineState::New | LineState::Finished | LineState::Suspended(_)
+        ) {
+            return Err(Error::InvalidState);
+        }
+        self.prompt = prompt.into();
+        Ok(())
+    }
+
     /// Clear the input and probe terminal size and cursor position.
     /// The terminal must answer the queries before ordinary input is accepted.
     pub fn start(&mut self) -> Output<'_, B, I> {
         self.buffer.truncate();
         self.parser = Parser::new();
         self.nav.reset();
-        self.state = LineState::GetSize;
+        self.state = LineState::GetSize {
+            cursor: 0,
+            parser: Parser::new(),
+        };
         self.generate_output(ProbeSize)
     }
 
@@ -139,7 +155,50 @@ where
         self.parser = Parser::new();
         self.nav.reset();
         self.state = LineState::Editing;
-        Ok(self.generate_output(PrintPrompt))
+        Ok(self.generate_output(Restore(0)))
+    }
+
+    /// Clear the displayed draft and hand the terminal to the application.
+    /// Drain the output before printing. The draft, cursor, parser and history
+    /// navigation are retained. Do not feed input until resuming.
+    pub fn suspend(&mut self) -> Result<Output<'_, B, I>, Error> {
+        if !matches!(self.state, LineState::Editing) {
+            return Err(Error::InvalidState);
+        }
+        self.state = LineState::Suspended(self.current_position());
+        Ok(self.generate_output(Suspend))
+    }
+
+    /// Probe the terminal and restore suspended editing.
+    /// Leave a line available for the prompt and restore the terminal's normal
+    /// editing modes first. As with `start()`, queries must be answered before
+    /// ordinary input is fed. Drain all output before continuing.
+    pub fn resume(&mut self) -> Result<Output<'_, B, I>, Error> {
+        let LineState::Suspended(cursor) = self.state else {
+            return Err(Error::InvalidState);
+        };
+        self.state = LineState::GetSize {
+            cursor,
+            parser: Parser::new(),
+        };
+        Ok(self.generate_output(ProbeSize))
+    }
+
+    /// Restore suspended editing with known terminal geometry.
+    /// The application must leave the cursor at column zero of `row`, with that
+    /// line available for the prompt. Invalid geometry leaves editing suspended.
+    pub fn resume_at(
+        &mut self,
+        rows: usize,
+        columns: usize,
+        row: usize,
+    ) -> Result<Output<'_, B, I>, Error> {
+        let LineState::Suspended(cursor) = self.state else {
+            return Err(Error::InvalidState);
+        };
+        *self.terminal = Terminal::try_new(rows, columns, row).ok_or(Error::InvalidGeometry)?;
+        self.state = LineState::Editing;
+        Ok(self.generate_output(Restore(cursor)))
     }
 
     /// Current input, including a submitted line.
@@ -238,31 +297,48 @@ where
 
     /// Feed a byte and consume the returned output before feeding another.
     /// Submission and abort are reported by [`crate::editor::OutputItem`].
-    /// Input before starting or after completion is ignored.
-    pub fn advance(&mut self, byte: u8) -> Output<'_, B, I> {
+    /// Input while suspended is rejected without consumption. Input before
+    /// starting or after completion is ignored.
+    pub fn advance(&mut self, byte: u8) -> Result<Output<'_, B, I>, Error> {
+        if matches!(self.state, LineState::Suspended(_)) {
+            return Err(Error::InvalidState);
+        }
+        Ok(self.advance_input(byte))
+    }
+
+    fn advance_input(&mut self, byte: u8) -> Output<'_, B, I> {
         if matches!(self.state, LineState::New | LineState::Finished) {
             return self.generate_output(Nothing);
         }
-        let action = self.parser.advance(byte);
+        let action = match &mut self.state {
+            LineState::GetSize { parser, .. } | LineState::GetPosition { parser, .. } => {
+                parser.advance(byte)
+            }
+            _ => self.parser.advance(byte),
+        };
 
         if !matches!(self.state, LineState::Editing) {
             return match (action, &self.state) {
                 (Action::Ignore, _) => self.generate_output(Nothing),
                 (
                     Action::ControlSequenceIntroducer(CSI::CPR(rows, columns)),
-                    LineState::GetSize,
+                    LineState::GetSize { cursor, .. },
                 ) if Terminal::try_new(rows, columns, 0).is_some() => {
                     self.terminal.resize(rows, columns);
-                    self.state = LineState::GetPosition;
-                    self.generate_output(ClearAndPrintPrompt)
+                    self.state = LineState::GetPosition {
+                        cursor: *cursor,
+                        parser: Parser::new(),
+                    };
+                    self.generate_output(Locate)
                 }
                 (
                     Action::ControlSequenceIntroducer(CSI::CPR(row, column)),
-                    LineState::GetPosition,
+                    LineState::GetPosition { cursor, .. },
                 ) if self.terminal.contains(row - 1, column - 1) => {
-                    self.terminal.reset(Cursor::new(row - 1, column - 1));
+                    let cursor = *cursor;
+                    self.terminal.reset(Cursor::new(row - 1, 0));
                     self.state = LineState::Editing;
-                    self.generate_output(Nothing)
+                    self.generate_output(Restore(cursor))
                 }
                 _ => {
                     self.state = LineState::Finished;
@@ -402,6 +478,89 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn suspend_preserves_editing() {
+        for columns in [8, 20] {
+            for probe in [false, true] {
+                let mut terminal = MockTerminal::new(4, columns, Cursor::new(3, 0));
+                let mut editor = Editor::new(LineBuffer::new_unbounded(), UnboundedHistory::new());
+                editor
+                    .nav
+                    .history
+                    .load_entries(["older", "abcdefgh"].into_iter());
+                let line = &mut editor.get_line("> ", &mut terminal);
+                advance(&mut terminal, line, "\x10\x1b[D\x1b[").unwrap();
+                for byte in line.suspend().unwrap().into_vec() {
+                    terminal.advance(byte);
+                }
+                assert!(matches!(line.suspend(), Err(Error::InvalidState)));
+                assert!(matches!(line.advance(b'x'), Err(Error::InvalidState)));
+                assert!(matches!(line.replace(0..1, "x"), Err(Error::InvalidState)));
+                assert!(matches!(
+                    line.resume_at(4, 0, 0),
+                    Err(Error::InvalidGeometry)
+                ));
+                for byte in b"first\r\n12345678\r\n\r\nlast\r\n" {
+                    terminal.advance(*byte);
+                }
+                let mut output = if probe {
+                    line.resume().unwrap().into_vec()
+                } else {
+                    line.resume_at(4, columns, terminal.cursor.row)
+                        .unwrap()
+                        .into_vec()
+                };
+                while !output.is_empty() {
+                    output = output
+                        .into_iter()
+                        .filter_map(|b| terminal.advance(b))
+                        .flatten()
+                        .flat_map(|b| line.advance(b).unwrap().into_vec())
+                        .collect();
+                }
+                assert_eq!(line.as_str(), "abcdefgh");
+                assert_eq!(line.cursor(), Some(7));
+                assert_eq!(
+                    terminal.screen_as_string(),
+                    if columns == 8 {
+                        "last\n> abcdef\ngh"
+                    } else {
+                        "12345678\nlast\n> abcdefgh"
+                    }
+                );
+                advance(&mut terminal, line, "DX").unwrap();
+                assert_eq!(line.as_str(), "abcdefXgh");
+                advance(&mut terminal, line, "\x10").unwrap();
+                assert_eq!(line.as_str(), "older");
+            }
+        }
+    }
+
+    #[test]
+    fn resume_with_new_prompt_and_geometry() {
+        let mut storage = Editor::new(LineBuffer::new_unbounded(), NoHistory {});
+        let mut editor = Line::new(
+            ["old", "> "].into_iter(),
+            &mut storage.buffer,
+            &mut storage.terminal,
+            &mut storage.nav,
+        );
+        editor.start_at(4, 20, 0).unwrap().into_vec();
+        for byte in b"abc\x02" {
+            editor.advance(*byte).unwrap().into_vec();
+        }
+        assert!(editor.set_prompt(["bad", "> "].into_iter()).is_err());
+        editor.suspend().unwrap().into_vec();
+        editor.set_prompt(["new", ": "].into_iter()).unwrap();
+        let mut terminal = MockTerminal::new(4, 6, Cursor::new(3, 0));
+        for byte in editor.resume_at(4, 6, 3).unwrap().into_vec() {
+            terminal.advance(byte);
+        }
+        assert_eq!(terminal.screen_as_string(), "new: a\nbc");
+        assert_eq!(editor.cursor(), Some(2));
+        assert_eq!(editor.terminal.get_cursor(), terminal.cursor);
+    }
+
+    #[test]
     fn oversized_history() {
         let mut storage = [0; 2];
         let mut entries = [0; 32];
@@ -522,7 +681,7 @@ pub(crate) mod tests {
 
                 reset_start = term_response
                     .into_iter()
-                    .flat_map(|b| line.advance(b).into_vec())
+                    .flat_map(|b| line.advance(b).unwrap().into_vec())
                     .collect();
             }
 
@@ -544,7 +703,7 @@ pub(crate) mod tests {
         terminal.bell = false;
 
         for input in input.to_byte_vec() {
-            for item in noline.advance(input) {
+            for item in noline.advance(input).unwrap() {
                 if let Some(bytes) = item.get_bytes() {
                     for &b in bytes {
                         terminal.advance(b);
@@ -602,22 +761,22 @@ pub(crate) mod tests {
         let output = b"\x1b[91;45R"
             .iter()
             .copied()
-            .flat_map(|b| line.advance(b).into_vec())
+            .flat_map(|b| line.advance(b).unwrap().into_vec())
             .collect::<Vec<_>>();
 
         dbg!(terminal.get_cursor());
 
-        assert_eq!(output, b"\r\x1b[J> \x1b[6n");
+        assert_eq!(output, b"\x1b[6n");
 
         let output = b"\x1b[2;3R"
             .iter()
             .copied()
-            .flat_map(|b| line.advance(b).into_vec())
+            .flat_map(|b| line.advance(b).unwrap().into_vec())
             .collect::<Vec<_>>();
 
         dbg!(terminal.get_cursor());
 
-        assert_eq!(output, b"");
+        assert_eq!(output, b"\r\x1b[J> \x1b[2;3H");
 
         assert_eq!(line.terminal.get_size(), (91, 45));
     }
@@ -646,7 +805,7 @@ pub(crate) mod tests {
         for input in [b'a', 0x1b] {
             assert!(line.start_at(4, 0, 2).is_err());
             line.start_at(4, 20, 0).unwrap().into_vec();
-            line.advance(input).into_iter().next();
+            line.advance(input).unwrap().into_iter().next();
             let mut terminal = MockTerminal::new(4, 20, Cursor::new(2, 0));
             for byte in line.start_at(4, 20, 2).unwrap().into_vec() {
                 assert!(terminal.advance(byte).is_none());
@@ -671,6 +830,7 @@ pub(crate) mod tests {
             .iter()
             .flat_map(|&b| {
                 line.advance(b)
+                    .unwrap()
                     .into_iter()
                     .filter_map(|item| item.event())
                     .collect::<Vec<_>>()
@@ -678,7 +838,7 @@ pub(crate) mod tests {
             .last();
         assert_eq!(event, Some(crate::editor::Event::Aborted));
         line.start_at(4, 20, 0).unwrap().into_vec();
-        line.advance(b'x').into_vec();
+        line.advance(b'x').unwrap().into_vec();
         assert_eq!(line.as_str(), "x");
     }
 

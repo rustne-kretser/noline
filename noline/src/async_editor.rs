@@ -108,7 +108,10 @@ where
         loop {
             let byte = Self::read_byte(io).await?;
 
-            if Self::handle_output(line.advance(byte), io).await?.is_some() {
+            if Self::handle_output(line.advance(byte)?, io)
+                .await?
+                .is_some()
+            {
                 break;
             }
         }

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Incremental editing with application-managed I/O and terminal initialization.
 - UTF-8 cursor offsets and range replacement for application-provided completion.
+- Suspend editing for application output, then restore the draft and cursor.
 
 ### Fixed
 

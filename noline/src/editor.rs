@@ -9,9 +9,16 @@
 //! updates the editor's cursor state. After interrupted output or a disconnect,
 //! restore the terminal to a state that accepts commands, then start a new line.
 //!
-//! Each line borrows its prompt. Cursor and replacement ranges use UTF-8 byte offsets.
+//! Use [`Line::suspend`] before application output, then [`Line::resume`] or
+//! [`Line::resume_at`] to restore editing. Finish each operation's output before
+//! transferring the terminal. Buffer user input during the handoff; terminal
+//! queries must be answered before replaying it. The application owns terminal
+//! modes and must leave a line available for the prompt.
+//! Each line borrows its prompt; [`Line::set_prompt`] changes it while suspended.
+//! Cursor and replacement ranges use UTF-8 byte offsets.
 //! Display positioning assumes one cell per Unicode scalar; wide and combining
 //! characters are not supported.
+//! Drafts taller than the terminal are not fully repainted when scrolling back.
 //!
 //! ```
 //! use noline::{builder::EditorBuilder, editor::Event};
@@ -26,7 +33,7 @@
 //! io.flush()?;
 //! for packet in [b"get /".as_slice(), b"value\r"] {
 //!     for &byte in packet {
-//!         for item in line.advance(byte) {
+//!         for item in line.advance(byte).unwrap() {
 //!             if let Some(bytes) = item.get_bytes() { io.write_all(bytes)?; }
 //!             if item.event() == Some(Event::Submitted) { /* line submitted */ }
 //!         }

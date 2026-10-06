@@ -122,7 +122,7 @@ where
         loop {
             let byte = Self::read_byte(io)?;
 
-            if Self::handle_output(line.advance(byte), io)?.is_some() {
+            if Self::handle_output(line.advance(byte)?, io)?.is_some() {
                 break;
             }
         }
@@ -258,7 +258,7 @@ pub mod tests {
                 (end, editor.readline("> ", &mut io)),
                 (b'\r', Ok("")) | (3, Err(crate::error::NolineError::Aborted))
             ));
-            assert_eq!(io.stdout.flushes, 3);
+            assert_eq!(io.stdout.flushes, 4);
             assert!(io.stdout.buffer.is_empty());
             assert!(rx.try_iter().collect::<Vec<_>>().ends_with(b"\n\r"));
         }
@@ -301,12 +301,12 @@ pub mod tests {
             let mut line = editor.line(prompt.as_str());
             line.start_at(4, 80, 0).unwrap().into_vec();
             if text == "second" {
-                line.advance(0x10).into_vec();
+                line.advance(0x10).unwrap().into_vec();
                 assert_eq!(line.as_str(), "first");
-                line.advance(0x0e).into_vec();
+                line.advance(0x0e).unwrap().into_vec();
             }
             for byte in text.bytes().chain([b'\r']) {
-                line.advance(byte).into_iter().for_each(drop);
+                line.advance(byte).unwrap().into_iter().for_each(drop);
             }
             let input = line.into_str();
             drop(prompt);
@@ -348,7 +348,7 @@ pub mod tests {
             input_tx.send(b).unwrap();
         }
 
-        for &b in b"\r\x1b[J> \x1b[6n" {
+        for &b in b"\x1b[6n" {
             let received = output_rx
                 .recv_timeout(::core::time::Duration::from_millis(1000))
                 .unwrap();
@@ -356,7 +356,7 @@ pub mod tests {
             assert_eq!(received, b);
         }
 
-        for &b in b"\x1b[1;3R" {
+        for &b in b"\x1b[1;1R" {
             input_tx.send(b).unwrap();
         }
 

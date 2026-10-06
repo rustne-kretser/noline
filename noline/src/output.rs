@@ -64,9 +64,10 @@ pub enum CursorMove {
 #[derive(Copy, Clone)]
 pub enum OutputAction {
     Nothing,
-    PrintPrompt,
+    Restore(usize),
+    Suspend,
     MoveCursor(CursorMove),
-    ClearAndPrintPrompt,
+    Locate,
     ClearAndPrintBuffer,
     RedrawAt(usize),
     PrintBufferAndMoveCursorForward,
@@ -511,8 +512,19 @@ where
         }
 
         let steps = match self.action {
-            OutputAction::PrintPrompt => {
-                pack([ClearLine, Print(Printable::from_iter(self.prompt.iter()))])
+            OutputAction::Restore(cursor) => {
+                let target = self
+                    .terminal
+                    .relative_position((self.prompt.len() + cursor) as isize);
+                pack([
+                    ClearLine,
+                    Print(Printable::from_iter(self.prompt.iter())),
+                    Print(Printable::from_str(self.buffer.as_str())),
+                    Move(MoveCursorToPosition::new(target)),
+                ])
+            }
+            OutputAction::Suspend => {
+                pack([Move(MoveCursorToPosition::new(Position::new(0, 0))), Erase])
             }
             OutputAction::MoveCursor(cursor_move) => {
                 let position = self.new_position(cursor_move);
@@ -587,11 +599,7 @@ where
                 ])
             }
             OutputAction::RingBell => pack([Bell]),
-            OutputAction::ClearAndPrintPrompt => pack([
-                ClearLine,
-                Print(Printable::from_iter(self.prompt.iter())),
-                GetPosition,
-            ]),
+            OutputAction::Locate => pack([GetPosition]),
             OutputAction::ClearAndPrintBuffer => {
                 let position = self.new_position(CursorMove::Start);
 
@@ -805,10 +813,10 @@ mod tests {
             &prompt,
             &line_buffer,
             &mut terminal,
-            OutputAction::ClearAndPrintPrompt,
+            OutputAction::Restore(0),
         ));
 
-        assert_eq!(result, "\r\x1b[J> \x1b[6n");
+        assert_eq!(result, "\r\x1b[J> \x1b[1;3H");
 
         line_buffer.insert_str(0, "Hello, world!").unwrap();
 
