@@ -66,11 +66,13 @@ impl EditorBuilder<NoBuffer, NoHistory> {
 
     #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
     /// Create builder for editor with unbounded buffer
+    /// Requires the `alloc` or `std` feature.
     ///
     /// # Example
     /// ```
     /// use noline::builder::EditorBuilder;
     ///
+    /// # #[cfg(any(feature = "alloc", feature = "std"))]
     /// let builder = EditorBuilder::new_unbounded();
     /// ```
     pub fn new_unbounded() -> EditorBuilder<UnboundedBuffer, NoHistory> {

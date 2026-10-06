@@ -49,8 +49,10 @@
 //! let mut io = MyIO {}; // IO handler, see full examples for details
 //!                       // how to implement it
 //!
-//! let mut editor = EditorBuilder::new_unbounded()
-//!     .with_unbounded_history()
+//! let mut buffer = [0; 128];
+//! let mut history = [0; 512];
+//! let mut editor = EditorBuilder::from_slice(&mut buffer)
+//!     .with_slice_history(&mut history)
 //!     .build_sync(&mut io)
 //!     .unwrap();
 //!
