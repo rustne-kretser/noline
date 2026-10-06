@@ -113,10 +113,10 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
     }
 
     /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
-    pub async fn build_async<IO: embedded_io_async::Read + embedded_io_async::Write>(
+    pub fn build_async<IO: embedded_io_async::Read + embedded_io_async::Write>(
         self,
         io: &mut IO,
-    ) -> Result<async_editor::Editor<B, H>, NolineError> {
-        async_editor::Editor::new(self.line_buffer, self.history, io).await
+    ) -> impl core::future::Future<Output = Result<async_editor::Editor<B, H>, NolineError>> {
+        async_editor::Editor::new(self.line_buffer, self.history, io)
     }
 }

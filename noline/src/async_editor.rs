@@ -27,19 +27,17 @@ where
     B: Buffer,
     H: History,
 {
-    /// Create and initialize line editor
-    pub async fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
+    /// Create an editor. Terminal initialization occurs when starting a line.
+    pub fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
         buffer: LineBuffer<B>,
         history: H,
         _io: &mut IO,
-    ) -> Result<Self, NolineError> {
-        let terminal = Terminal::default();
-
-        Ok(Self {
+    ) -> impl core::future::Future<Output = Result<Self, NolineError>> {
+        core::future::ready(Ok(Self {
             buffer,
-            terminal,
+            terminal: Terminal::default(),
             history,
-        })
+        }))
     }
 
     async fn handle_output<'b, 'item, IO, I>(
