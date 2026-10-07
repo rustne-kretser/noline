@@ -3,6 +3,9 @@
 //! Use [`crate::sync_editor::Editor::line`] or [`crate::async_editor::Editor::line`]
 //! to drive editing yourself, for example to provide completion or print help.
 //!
+//! Run `cargo run -p noline-example --bin std-incremental` from the repository
+//! checkout for Tab completion and help that preserves the draft and cursor.
+//!
 //! The line retains input state between calls. Start each line with terminal
 //! probing or known geometry, then feed bytes with [`Line::advance`]. Consume and
 //! write all bytes and flush before the next editing operation: consuming output
