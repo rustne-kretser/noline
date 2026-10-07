@@ -20,11 +20,11 @@ impl Utf8Byte for u8 {
             Utf8ByteType::SingleByte
         } else if byte & 0b11000000 == 0b10000000 {
             Utf8ByteType::Continuation
-        } else if byte & 0b11100000 == 0b11000000 {
+        } else if (0xc2..=0xdf).contains(&byte) {
             Utf8ByteType::StartTwoByte
         } else if byte & 0b11110000 == 0b11100000 {
             Utf8ByteType::StartThreeByte
-        } else if byte & 0b11111000 == 0b11110000 {
+        } else if (0xf0..=0xf4).contains(&byte) {
             Utf8ByteType::StartFourByte
         } else {
             Utf8ByteType::Invalid
@@ -133,6 +133,19 @@ impl Utf8Decoder {
         if self.pos > 0 && !byte.utf8_is_continuation() {
             return Err(());
         }
+        // Bounds on the second byte exclude overlong encodings, surrogates,
+        // and code points above U+10FFFF.
+        if self.pos == 1
+            && match self.buf[0] {
+                0xe0 => byte < 0xa0,
+                0xed => byte > 0x9f,
+                0xf0 => byte < 0x90,
+                0xf4 => byte > 0x8f,
+                _ => false,
+            }
+        {
+            return Err(());
+        }
 
         self.buf[self.pos] = byte;
         self.pos += 1;
@@ -200,6 +213,36 @@ impl Utf8Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoding_boundaries() {
+        for bytes in [
+            &b"\xc0\x80"[..],
+            b"\xc1\xbf",
+            b"\xc2\x80",
+            b"\xdf\xbf",
+            b"\xe0\x9f\xbf",
+            b"\xe0\xa0\x80",
+            b"\xed\x9f\xbf",
+            b"\xed\xa0\x80",
+            b"\xf0\x8f\xbf\xbf",
+            b"\xf0\x90\x80\x80",
+            b"\xf4\x8f\xbf\xbf",
+            b"\xf4\x90\x80\x80",
+            b"\xf5\x80\x80\x80",
+        ] {
+            let mut decoder = Utf8Decoder::new();
+            let result = bytes
+                .iter()
+                .map(|&byte| decoder.advance(byte))
+                .find(|status| !matches!(status, Utf8DecoderStatus::Continuation));
+            match (core::str::from_utf8(bytes), result) {
+                (Ok(_), Some(Utf8DecoderStatus::Done(c))) => assert_eq!(c.as_bytes(), bytes),
+                (Err(_), Some(Utf8DecoderStatus::Error)) => {}
+                result => panic!("{bytes:?}: {result:?}"),
+            }
+        }
+    }
 
     #[test]
     fn ascii() {
@@ -278,7 +321,7 @@ mod tests {
     fn invalid_continuation() {
         let mut parser = Utf8Decoder::new();
 
-        assert_eq!(parser.advance(0b11000000), Utf8DecoderStatus::Continuation);
+        assert_eq!(parser.advance(0b11000010), Utf8DecoderStatus::Continuation);
         assert_eq!(parser.advance(0b00000000), Utf8DecoderStatus::Error);
     }
 
