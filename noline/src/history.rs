@@ -232,7 +232,11 @@ impl<'a> SliceHistory<'a> {
 
         [self.window.start()]
             .into_iter()
-            .chain(delimeters.clone().map(|i| i + 1))
+            .chain(
+                delimeters
+                    .clone()
+                    .map(|i| if i + 1 == self.buffer.len() { 0 } else { i + 1 }),
+            )
             .zip(delimeters.chain([self.window.end()]))
             .filter_map(|(start, end)| {
                 if start != end {
@@ -448,6 +452,23 @@ mod tests {
                 })
                 .collect()
         }
+    }
+
+    #[test]
+    fn history_at_buffer_boundary() {
+        let mut storage = [0; 4];
+        let mut history = SliceHistory::new(&mut storage);
+        history.load_entries(["x", "a"].into_iter());
+        assert_eq!(
+            Vec::<String>::from_iter(get_history_entries(&history)),
+            ["x", "a"]
+        );
+        assert_eq!(history.number_of_entries(), 2);
+        history.add_entry("é").unwrap();
+        assert_eq!(
+            Vec::<String>::from_iter(get_history_entries(&history)),
+            ["é"]
+        );
     }
 
     #[test]
