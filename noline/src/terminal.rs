@@ -49,6 +49,15 @@ impl Default for Terminal {
 }
 
 impl Terminal {
+    pub(crate) fn try_new(rows: usize, columns: usize, row: usize) -> Option<Self> {
+        (columns > 0 && row < rows && rows.checked_mul(columns)? <= isize::MAX as usize)
+            .then(|| Self::new(rows, columns, Cursor::new(row, 0)))
+    }
+
+    pub(crate) fn contains(&self, row: usize, column: usize) -> bool {
+        row < self.rows && column < self.columns
+    }
+
     pub fn new(rows: usize, columns: usize, cursor: Cursor) -> Self {
         let row_offset = -(cursor.row as isize);
 

@@ -66,11 +66,13 @@ impl EditorBuilder<NoBuffer, NoHistory> {
 
     #[cfg(any(test, doc, feature = "alloc", feature = "std"))]
     /// Create builder for editor with unbounded buffer
+    /// Requires the `alloc` or `std` feature.
     ///
     /// # Example
     /// ```
     /// use noline::builder::EditorBuilder;
     ///
+    /// # #[cfg(any(feature = "alloc", feature = "std"))]
     /// let builder = EditorBuilder::new_unbounded();
     /// ```
     pub fn new_unbounded() -> EditorBuilder<UnboundedBuffer, NoHistory> {
@@ -111,10 +113,10 @@ impl<B: Buffer, H: History> EditorBuilder<B, H> {
     }
 
     /// Build [`async_editor::Editor`]. Is equivalent of calling [`async_editor::Editor::new()`].
-    pub async fn build_async<IO: embedded_io_async::Read + embedded_io_async::Write>(
+    pub fn build_async<IO: embedded_io_async::Read + embedded_io_async::Write>(
         self,
         io: &mut IO,
-    ) -> Result<async_editor::Editor<B, H>, NolineError> {
-        async_editor::Editor::new(self.line_buffer, self.history, io).await
+    ) -> impl core::future::Future<Output = Result<async_editor::Editor<B, H>, NolineError>> {
+        async_editor::Editor::new(self.line_buffer, self.history, io)
     }
 }

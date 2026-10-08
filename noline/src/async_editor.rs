@@ -27,19 +27,17 @@ where
     B: Buffer,
     H: History,
 {
-    /// Create and initialize line editor
-    pub async fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
+    /// Create an editor. Terminal initialization occurs when starting a line.
+    pub fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
         buffer: LineBuffer<B>,
         history: H,
         _io: &mut IO,
-    ) -> Result<Self, NolineError> {
-        let terminal = Terminal::default();
-
-        Ok(Self {
+    ) -> impl core::future::Future<Output = Result<Self, NolineError>> {
+        core::future::ready(Ok(Self {
             buffer,
-            terminal,
+            terminal: Terminal::default(),
             history,
-        })
+        }))
     }
 
     async fn handle_output<'b, 'item, IO, I>(
@@ -50,21 +48,22 @@ where
         IO: embedded_io_async::Read + embedded_io_async::Write,
         I: Iterator<Item = &'item str> + Clone,
     {
+        let mut result = None;
         for item in output {
             if let Some(bytes) = item.get_bytes() {
-                io.write(bytes).await?;
+                io.write_all(bytes).await?;
             }
 
-            io.flush().await?;
-
-            match item {
-                OutputItem::EndOfString => return Ok(Some(())),
-                OutputItem::Abort => return Err(NolineError::Aborted),
-                _ => (),
-            }
+            result = Some(match item {
+                OutputItem::EndOfString => Ok(Some(())),
+                OutputItem::Abort => Err(NolineError::Aborted),
+                _ => Ok(None),
+            });
         }
-
-        Ok(None)
+        if result.is_some() {
+            io.flush().await?;
+        }
+        result.unwrap_or(Ok(None))
     }
 
     async fn read_byte<IO>(io: &mut IO) -> Result<u8, NolineError>

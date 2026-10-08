@@ -52,12 +52,12 @@ where
         match action {
             Action::ControlSequenceIntroducer(CSI::CPR(x, y)) => match self.state {
                 ResetState::New => panic!("Invalid state"),
-                ResetState::GetSize => {
+                ResetState::GetSize if Terminal::try_new(x, y, 0).is_some() => {
                     self.line.terminal.resize(x, y);
                     self.state = ResetState::GetPosition;
                     Some(self.line.generate_output(ClearAndPrintPrompt))
                 }
-                ResetState::GetPosition => {
+                ResetState::GetPosition if self.line.terminal.contains(x - 1, y - 1) => {
                     #[cfg(test)]
                     dbg!(x, y);
                     self.line.terminal.reset(Cursor::new(x - 1, y - 1));
@@ -65,9 +65,16 @@ where
                     None
                 }
                 ResetState::Done => panic!("Invalid state"),
+                _ => {
+                    self.state = ResetState::Done;
+                    Some(self.line.generate_output(Abort))
+                }
             },
             Action::Ignore => Some(self.line.generate_output(Nothing)),
-            _ => None,
+            _ => {
+                self.state = ResetState::Done;
+                Some(self.line.generate_output(Abort))
+            }
         }
     }
 }
@@ -185,6 +192,17 @@ where
         pos - self.prompt.len()
     }
 
+    fn delete_forward(&mut self) -> Output<'_, B, I> {
+        let pos = self.current_position();
+        let action = if self.buffer.as_str().chars().nth(pos).is_some() {
+            self.buffer.delete(pos);
+            EraseAndPrintBuffer
+        } else {
+            RingBell
+        };
+        self.generate_output(action)
+    }
+
     fn history_move_up(&mut self) -> Output<'_, B, I> {
         let entry = if self.nav.is_active() {
             self.nav.move_up()
@@ -195,19 +213,10 @@ where
             Err(())
         };
 
-        if let Ok(entry) = entry {
-            let (slice1, slice2) = entry.get_slices();
-
-            self.buffer.truncate();
-            unsafe {
-                self.buffer.insert_bytes(0, slice1).unwrap();
-                self.buffer.insert_bytes(slice1.len(), slice2).unwrap();
-            }
-
-            self.generate_output(ClearAndPrintBuffer)
-        } else {
-            self.generate_output(RingBell)
-        }
+        let action = entry
+            .and_then(|entry| self.buffer.restore_history(entry))
+            .map_or(RingBell, |_| ClearAndPrintBuffer);
+        self.generate_output(action)
     }
 
     fn history_move_down(&mut self) -> Output<'_, B, I> {
@@ -217,20 +226,16 @@ where
             return self.generate_output(RingBell);
         };
 
-        if let Ok(entry) = entry {
-            let (slice1, slice2) = entry.get_slices();
-
-            self.buffer.truncate();
-            unsafe {
-                self.buffer.insert_bytes(0, slice1).unwrap();
-                self.buffer.insert_bytes(slice1.len(), slice2).unwrap();
-            }
+        let action = if let Ok(entry) = entry {
+            self.buffer
+                .restore_history(entry)
+                .map_or(RingBell, |_| ClearAndPrintBuffer)
         } else {
             self.nav.reset();
             self.buffer.truncate();
-        }
-
-        self.generate_output(ClearAndPrintBuffer)
+            ClearAndPrintBuffer
+        };
+        self.generate_output(action)
     }
 
     // Advance state machine by one byte. Returns output iterator over
@@ -255,23 +260,8 @@ where
                 CtrlA => self.generate_output(MoveCursor(CursorMove::Start)),
                 CtrlB => self.generate_output(MoveCursor(CursorMove::Back)),
                 CtrlC => self.generate_output(Abort),
-                CtrlD => {
-                    let len = self.buffer.len();
-
-                    if len > 0 {
-                        let pos = self.current_position();
-
-                        if pos < len {
-                            self.buffer.delete(pos);
-
-                            self.generate_output(EraseAndPrintBuffer)
-                        } else {
-                            self.generate_output(RingBell)
-                        }
-                    } else {
-                        self.generate_output(Abort)
-                    }
-                }
+                CtrlD if self.buffer.len() == 0 => self.generate_output(Abort),
+                CtrlD => self.delete_forward(),
                 CtrlE => self.generate_output(MoveCursor(CursorMove::End)),
                 CtrlF => self.generate_output(MoveCursor(CursorMove::Forward)),
                 CtrlK => {
@@ -328,24 +318,9 @@ where
                 CSI::CUF(_) => self.generate_output(MoveCursor(CursorMove::Forward)),
                 CSI::CUB(_) => self.generate_output(MoveCursor(CursorMove::Back)),
                 CSI::Home => self.generate_output(MoveCursor(CursorMove::Start)),
-                CSI::Delete => {
-                    let len = self.buffer.len();
-                    let pos = self.current_position();
-
-                    if pos < len {
-                        self.buffer.delete(pos);
-
-                        self.generate_output(EraseAndPrintBuffer)
-                    } else {
-                        self.generate_output(RingBell)
-                    }
-                }
+                CSI::Delete => self.delete_forward(),
                 CSI::End => self.generate_output(MoveCursor(CursorMove::End)),
-                CSI::CPR(row, column) => {
-                    let cursor = Cursor::new(row - 1, column - 1);
-                    self.terminal.reset(cursor);
-                    self.generate_output(Nothing)
-                }
+                CSI::CPR(_, _) => self.generate_output(Nothing),
                 CSI::Unknown(_) => self.generate_output(RingBell),
                 CSI::CUU(_) => self.history_move_up(),
                 CSI::CUD(_) => self.history_move_down(),
@@ -375,6 +350,47 @@ pub(crate) mod tests {
     use crate::testlib::{csi, MockTerminal, ToByteVec};
 
     use super::*;
+
+    #[test]
+    fn delete_at_unicode_end() {
+        for key in ["\x04", "\x1b[3~"] {
+            let (mut terminal, mut editor) = get_terminal_and_editor(4, 80, Cursor::new(0, 0));
+            let mut line = editor.get_line("> ", &mut terminal);
+            advance(&mut terminal, &mut line, "é").unwrap();
+            assert_eq!(advance(&mut terminal, &mut line, key), Err(()));
+            advance(&mut terminal, &mut line, "\x02").unwrap();
+            advance(&mut terminal, &mut line, key).unwrap();
+            advance(&mut terminal, &mut line, "x").unwrap();
+            assert_eq!(line.buffer.as_str(), "x");
+            assert_eq!(terminal.current_line_as_string(), "> x");
+        }
+    }
+
+    #[test]
+    fn oversized_history() {
+        let mut storage = [0; 2];
+        let mut entries = [0; 32];
+        let mut history = SliceHistory::new(&mut entries);
+        history.load_entries(["ok", "too long"].into_iter());
+        let mut editor = Editor::new(LineBuffer::from_slice(&mut storage), history);
+        let mut terminal = MockTerminal::new(4, 80, Cursor::new(0, 0));
+        let mut line = editor.get_line("> ", &mut terminal);
+        assert_eq!(advance(&mut terminal, &mut line, "\x10"), Err(()));
+        assert_eq!(line.buffer.as_str(), "");
+        advance(&mut terminal, &mut line, "\x10").unwrap();
+        assert_eq!(line.buffer.as_str(), "ok");
+        assert_eq!(advance(&mut terminal, &mut line, "\x0e"), Err(()));
+        assert_eq!(line.buffer.as_str(), "ok");
+    }
+
+    #[test]
+    fn submit_below_wrapped_draft() {
+        let (mut terminal, mut editor) = get_terminal_and_editor(4, 4, Cursor::new(0, 0));
+        let mut line = editor.get_line("> ", &mut terminal);
+        advance(&mut terminal, &mut line, "abcdefgh\x01\r").unwrap();
+        assert_eq!(terminal.get_cursor(), Cursor::new(3, 0));
+        assert_eq!(terminal.screen_as_string(), "> ab\ncdef\ngh");
+    }
 
     #[test]
     fn multibyte_prompt() {

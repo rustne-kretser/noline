@@ -1,10 +1,10 @@
 //! Buffer to hold line.
 //!
-//! Can be backed by [`std::vec::Vec<u8>`] for dynamic allocation or
-//! [`StaticBuffer`] for static allocation. Custom implementation can
+//! Can be backed by `Vec<u8>` for dynamic allocation or
+//! [`SliceBuffer`] for static allocation. Custom implementation can
 //! be provided with the [`Buffer`] trait.
 
-use crate::utf8::Utf8Char;
+use crate::{history::CircularSlice, utf8::Utf8Char};
 use core::{ops::Range, str::from_utf8_unchecked};
 
 /// Trait for defining underlying buffer
@@ -54,6 +54,23 @@ impl<B: Buffer> LineBuffer<B> {
         self.buf.buffer_len()
     }
 
+    /// Restore a history entry whose circular slices may split a UTF-8 character.
+    pub(crate) fn restore_history(&mut self, entry: CircularSlice<'_>) -> Result<(), ()> {
+        let (first, second) = entry.get_slices();
+        if self
+            .buf
+            .capacity()
+            .is_some_and(|capacity| first.len() + second.len() > capacity)
+        {
+            return Err(());
+        }
+        self.truncate();
+        for (index, &byte) in first.iter().chain(second).enumerate() {
+            self.buf.insert_byte(index, byte);
+        }
+        Ok(())
+    }
+
     /// Return buffer as string. The buffer should only hold a valid
     /// UTF-8, so this function is infallible.
     pub fn as_str(&self) -> &str {
@@ -69,13 +86,12 @@ impl<B: Buffer> LineBuffer<B> {
             .map(|((start, c), (end, _))| (start..end, c))
     }
 
-    fn get_byte_position(&self, char_index: usize) -> usize {
+    pub(crate) fn get_byte_position(&self, char_index: usize) -> usize {
         let s = self.as_str();
 
         s.char_indices()
-            .skip(char_index)
+            .nth(char_index)
             .map(|(pos, _)| pos)
-            .next()
             .unwrap_or(s.len())
     }
 
@@ -322,6 +338,18 @@ pub use self::alloc::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrapped_history() {
+        use crate::history::{History, SliceHistory};
+        let mut entries = [0; 3];
+        let mut history = SliceHistory::new(&mut entries);
+        history.load_entries(["a", "é"].into_iter());
+        let mut storage = [0; 2];
+        let mut line = LineBuffer::from_slice(&mut storage);
+        line.restore_history(history.get_entry(0).unwrap()).unwrap();
+        assert_eq!(line.as_str(), "é");
+    }
 
     #[test]
     fn slice_buffer() {

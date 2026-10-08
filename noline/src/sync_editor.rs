@@ -65,21 +65,22 @@ where
         IO: Read + Write,
         I: Iterator<Item = &'item str> + Clone,
     {
+        let mut result = None;
         for item in output {
             if let Some(bytes) = item.get_bytes() {
-                io.write(bytes)?;
+                io.write_all(bytes)?;
             }
 
-            io.flush()?;
-
-            match item {
-                OutputItem::EndOfString => return Ok(Some(())),
-                OutputItem::Abort => return Err(NolineError::Aborted),
-                _ => (),
-            }
+            result = Some(match item {
+                OutputItem::EndOfString => Ok(Some(())),
+                OutputItem::Abort => Err(NolineError::Aborted),
+                _ => Ok(None),
+            });
         }
-
-        Ok(None)
+        if result.is_some() {
+            io.flush()?;
+        }
+        result.unwrap_or(Ok(None))
     }
 
     fn read_byte<IO>(io: &mut IO) -> Result<u8, NolineError>
@@ -166,6 +167,7 @@ pub mod tests {
     struct MockStdout {
         buffer: Vec<u8>,
         tx: Sender<u8>,
+        flushes: usize,
     }
 
     impl MockStdout {
@@ -173,6 +175,7 @@ pub mod tests {
             Self {
                 buffer: Vec::new(),
                 tx,
+                flushes: 0,
             }
         }
     }
@@ -228,11 +231,13 @@ pub mod tests {
 
     impl embedded_io::Write for MockIO {
         fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            let buf = &buf[..buf.len().min(1)];
             self.stdout.buffer.extend(buf);
             Ok(buf.len())
         }
 
         fn flush(&mut self) -> Result<(), Self::Error> {
+            self.stdout.flushes += 1;
             for byte in self.stdout.buffer.drain(0..) {
                 self.stdout.tx.send(byte).unwrap();
             }
@@ -243,8 +248,51 @@ pub mod tests {
 
     impl core::fmt::Write for MockIO {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            self.write(s.as_bytes()).or(Err(core::fmt::Error))?;
+            self.write_all(s.as_bytes()).or(Err(core::fmt::Error))?;
             Ok(())
+        }
+    }
+
+    #[test]
+    fn flush_output_batches() {
+        for end in [b'\r', 3] {
+            let (tx, input) = unbounded();
+            let (output, rx) = unbounded();
+            let mut io = MockIO::new(MockStdin::new(input), MockStdout::new(output));
+            for byte in b"\x1b[4;80R\x1b[1;3R\x1b".iter().copied().chain([end]) {
+                tx.send(byte).unwrap();
+            }
+            drop(tx);
+            let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
+            assert!(matches!(
+                (end, editor.readline("> ", &mut io)),
+                (b'\r', Ok("")) | (3, Err(crate::error::NolineError::Aborted))
+            ));
+            assert_eq!(io.stdout.flushes, 3);
+            assert!(io.stdout.buffer.is_empty());
+            assert!(rx.try_iter().collect::<Vec<_>>().ends_with(b"\n\r"));
+        }
+    }
+
+    #[test]
+    fn invalid_geometry_recovers() {
+        for report in [
+            std::format!("\x1b[{};1R", usize::MAX),
+            "\x1b[4;20R\x1b[5;1R".into(),
+        ] {
+            let (tx, rx) = unbounded();
+            let (output_tx, _output_rx) = unbounded();
+            let mut io = MockIO::new(MockStdin::new(rx), MockStdout::new(output_tx));
+            for byte in (report + "\x1b[4;20R\x1b[1;3Rok\r").bytes() {
+                tx.send(byte).unwrap();
+            }
+            drop(tx);
+            let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
+            assert!(matches!(
+                editor.readline("> ", &mut io),
+                Err(crate::error::NolineError::Aborted)
+            ));
+            assert_eq!(editor.readline("> ", &mut io).unwrap(), "ok");
         }
     }
 
