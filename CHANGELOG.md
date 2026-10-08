@@ -5,18 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Incremental editing with application-managed I/O and terminal initialization.
+- UTF-8 cursor offsets and range replacement for application-provided completion.
+- Suspend editing for application output, then restore the draft and cursor.
+
+### Fixed
+
+- Fix cursor positioning with multibyte prompts.
+- Fix panic on missing CPR arguments.
+- Reject malformed UTF-8 and recover interrupted input.
+- Restore wrapped UTF-8 history safely; reject oversized entries.
+- Preserve terminal output when I/O accepts partial writes.
+- Avoid empty history entries at the circular buffer boundary.
+- Handle invalid or large terminal reports without panicking.
+- Start command output below the entire submitted line.
+- Fix forward deletion of multibyte input.
+
 ## [0.5.1 - 2026-03-31]
 
 - Update outdated packages
 - Fix examples to build with updated packages
 - Added a lifetime specifier to prevent a lint about elided lifetimes
 - Fixed a bug in the sync rp2040 example where the flush impl wasn't polling, causing the cli to break entirely.
-
-## [Unreleased]
-
-- Reject invalid UTF-8 and recover interrupted input
-- Fix cursor positioning with multibyte prompts
-- Bugfix: Missing CPR arguments causes panic
 
 ## [0.5.0 - 2024-12-12]
 

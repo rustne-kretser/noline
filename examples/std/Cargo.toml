@@ -25,3 +25,6 @@ name = "std-sync"
 
 [[bin]]
 name = "std-async-tokio"
+
+[[bin]]
+name = "std-incremental"

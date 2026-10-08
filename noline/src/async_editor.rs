@@ -7,9 +7,9 @@ use embedded_io_async::ReadExactError;
 use crate::{
     core::{Line, Prompt},
     error::NolineError,
-    history::{get_history_entries, CircularSlice, History},
+    history::{get_history_entries, CircularSlice, History, HistoryNavigator},
     line_buffer::{Buffer, LineBuffer},
-    output::{Output, OutputItem},
+    output::{Event, Output},
     terminal::Terminal,
 };
 
@@ -19,7 +19,7 @@ use crate::{
 pub struct Editor<B: Buffer, H: History> {
     buffer: LineBuffer<B>,
     terminal: Terminal,
-    history: H,
+    nav: HistoryNavigator<H>,
 }
 
 impl<B, H> Editor<B, H>
@@ -27,19 +27,17 @@ where
     B: Buffer,
     H: History,
 {
-    /// Create and initialize line editor
-    pub async fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
+    /// Create an editor. Terminal initialization occurs when starting a line.
+    pub fn new<IO: embedded_io_async::Read + embedded_io_async::Write>(
         buffer: LineBuffer<B>,
         history: H,
         _io: &mut IO,
-    ) -> Result<Self, NolineError> {
-        let terminal = Terminal::default();
-
-        Ok(Self {
+    ) -> impl core::future::Future<Output = Result<Self, NolineError>> {
+        core::future::ready(Ok(Self {
             buffer,
-            terminal,
-            history,
-        })
+            terminal: Terminal::default(),
+            nav: HistoryNavigator::new(history),
+        }))
     }
 
     async fn handle_output<'b, 'item, IO, I>(
@@ -50,21 +48,22 @@ where
         IO: embedded_io_async::Read + embedded_io_async::Write,
         I: Iterator<Item = &'item str> + Clone,
     {
+        let mut result = None;
         for item in output {
             if let Some(bytes) = item.get_bytes() {
-                io.write(bytes).await?;
+                io.write_all(bytes).await?;
             }
 
-            io.flush().await?;
-
-            match item {
-                OutputItem::EndOfString => return Ok(Some(())),
-                OutputItem::Abort => return Err(NolineError::Aborted),
-                _ => (),
-            }
+            result = Some(match item.event() {
+                Some(Event::Submitted) => Ok(Some(())),
+                Some(Event::Aborted) => Err(NolineError::Aborted),
+                _ => Ok(None),
+            });
         }
-
-        Ok(None)
+        if result.is_some() {
+            io.flush().await?;
+        }
+        result.unwrap_or(Ok(None))
     }
 
     async fn read_byte<IO>(io: &mut IO) -> Result<u8, NolineError>
@@ -82,7 +81,18 @@ where
         }
     }
 
-    /// Read line from `stdin`
+    /// Borrow a line for application-driven editing. Start it before feeding input.
+    pub fn line<'item, I>(&mut self, prompt: impl Into<Prompt<I>>) -> Line<'_, B, H, I>
+    where
+        I: Iterator<Item = &'item str> + Clone,
+    {
+        Line::new(prompt, &mut self.buffer, &mut self.terminal, &mut self.nav)
+    }
+
+    /// Read a line from the supplied I/O.
+    ///
+    /// Dropping this future may interrupt output. Use [`Self::line`] to drive
+    /// individual editing operations instead.
     pub async fn readline<'b, 'item, IO, I>(
         &'b mut self,
         prompt: impl Into<Prompt<I>>,
@@ -92,31 +102,16 @@ where
         IO: embedded_io_async::Read + embedded_io_async::Write,
         I: Iterator<Item = &'item str> + Clone,
     {
-        let mut line = Line::new(
-            prompt,
-            &mut self.buffer,
-            &mut self.terminal,
-            &mut self.history,
-        );
-
-        let mut reset = line.reset();
-
-        Self::handle_output(reset.start(), io).await?;
+        let mut line = self.line(prompt);
+        Self::handle_output(line.start(), io).await?;
 
         loop {
             let byte = Self::read_byte(io).await?;
 
-            if let Some(output) = reset.advance(byte) {
-                Self::handle_output(output, io).await?;
-            } else {
-                break;
-            }
-        }
-
-        loop {
-            let byte = Self::read_byte(io).await?;
-
-            if Self::handle_output(line.advance(byte), io).await?.is_some() {
+            if Self::handle_output(line.advance(byte)?, io)
+                .await?
+                .is_some()
+            {
                 break;
             }
         }
@@ -126,11 +121,11 @@ where
 
     /// Load history from iterator
     pub fn load_history<'a>(&mut self, entries: impl Iterator<Item = &'a str>) -> usize {
-        self.history.load_entries(entries)
+        self.nav.history.load_entries(entries)
     }
 
     /// Get history as iterator over circular slices
     pub fn get_history(&self) -> impl Iterator<Item = CircularSlice<'_>> {
-        get_history_entries(&self.history)
+        get_history_entries(&self.nav.history)
     }
 }

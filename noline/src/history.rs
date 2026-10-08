@@ -232,7 +232,11 @@ impl<'a> SliceHistory<'a> {
 
         [self.window.start()]
             .into_iter()
-            .chain(delimeters.clone().map(|i| i + 1))
+            .chain(
+                delimeters
+                    .clone()
+                    .map(|i| if i + 1 == self.buffer.len() { 0 } else { i + 1 }),
+            )
             .zip(delimeters.chain([self.window.end()]))
             .filter_map(|(start, end)| {
                 if start != end {
@@ -322,14 +326,14 @@ impl History for NoHistory {
     }
 }
 
-/// Wrapper used for history navigation in [`core::Line`]
-pub(crate) struct HistoryNavigator<'a, H: History> {
-    pub(crate) history: &'a mut H,
+/// History and its current navigation position.
+pub(crate) struct HistoryNavigator<H: History> {
+    pub(crate) history: H,
     position: Option<usize>,
 }
 
-impl<'a, H: History> HistoryNavigator<'a, H> {
-    pub(crate) fn new(history: &'a mut H) -> Self {
+impl<H: History> HistoryNavigator<H> {
+    pub(crate) fn new(history: H) -> Self {
         Self {
             history,
             position: None,
@@ -408,7 +412,7 @@ mod alloc {
 
     impl History for UnboundedHistory {
         fn get_entry(&self, index: usize) -> Option<CircularSlice<'_>> {
-            let s = self.buffer[index].as_str();
+            let s = self.buffer.get(index)?.as_str();
 
             Some(CircularSlice::new(s.as_bytes(), 0, s.len(), s.len()))
         }
@@ -448,6 +452,35 @@ mod tests {
                 })
                 .collect()
         }
+    }
+
+    #[test]
+    fn history_at_buffer_boundary() {
+        let mut storage = [0; 4];
+        let mut history = SliceHistory::new(&mut storage);
+        history.load_entries(["x", "a"].into_iter());
+        assert_eq!(
+            Vec::<String>::from_iter(get_history_entries(&history)),
+            ["x", "a"]
+        );
+        assert_eq!(history.number_of_entries(), 2);
+        history.add_entry("é").unwrap();
+        assert_eq!(
+            Vec::<String>::from_iter(get_history_entries(&history)),
+            ["é"]
+        );
+    }
+
+    #[test]
+    fn unbounded_lookup() {
+        let mut history = UnboundedHistory::new();
+        assert!(history.get_entry(0).is_none());
+        history.add_entry("é").unwrap();
+        assert!(history.get_entry(1).is_none());
+        assert_eq!(
+            Vec::<String>::from_iter(get_history_entries(&history)),
+            ["é"]
+        );
     }
 
     #[test]
@@ -584,8 +617,7 @@ mod tests {
 
     #[test]
     fn navigator() {
-        let mut history = UnboundedHistory::new();
-        let mut navigator = HistoryNavigator::new(&mut history);
+        let mut navigator = HistoryNavigator::new(UnboundedHistory::new());
 
         assert!(navigator.move_up().is_err());
         assert!(navigator.move_down().is_err());

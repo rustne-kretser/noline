@@ -7,19 +7,46 @@ use crate::{
 };
 
 #[cfg_attr(test, derive(Debug))]
-pub enum OutputItem<'a> {
+enum Item<'a> {
     Slice(&'a [u8]),
-    UintToBytes(UintToBytes<4>),
+    UintToBytes(UintToBytes<{ usize::MAX.ilog10() as usize + 1 }>),
     EndOfString,
     Abort,
 }
 
-impl<'a> OutputItem<'a> {
+impl Item<'_> {
     pub fn get_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::Slice(slice) => Some(slice),
             Self::UintToBytes(uint) => Some(uint.as_bytes()),
             Self::EndOfString | Self::Abort => None,
+        }
+    }
+}
+
+/// Terminal bytes or a completed editing operation.
+#[cfg_attr(test, derive(Debug))]
+pub struct OutputItem<'a>(Item<'a>);
+
+/// Outcome of editing a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    Submitted,
+    Aborted,
+}
+
+impl OutputItem<'_> {
+    /// Bytes to write before advancing the output iterator.
+    pub fn get_bytes(&self) -> Option<&[u8]> {
+        self.0.get_bytes()
+    }
+
+    /// Line outcome, delivered after its terminal output.
+    pub fn event(&self) -> Option<Event> {
+        match self.0 {
+            Item::EndOfString => Some(Event::Submitted),
+            Item::Abort => Some(Event::Aborted),
+            _ => None,
         }
     }
 }
@@ -37,9 +64,12 @@ pub enum CursorMove {
 #[derive(Copy, Clone)]
 pub enum OutputAction {
     Nothing,
+    Restore(usize),
+    Suspend,
     MoveCursor(CursorMove),
-    ClearAndPrintPrompt,
+    Locate,
     ClearAndPrintBuffer,
+    RedrawAt(usize),
     PrintBufferAndMoveCursorForward,
     EraseAfterCursor,
     EraseAndPrintBuffer,
@@ -63,22 +93,15 @@ impl<const N: usize> UintToBytes<N> {
     fn from_uint<I: Into<usize>>(n: I) -> Option<Self> {
         let mut n: usize = n.into();
 
-        if n < 10_usize.pow(N as u32) {
-            let mut bytes = [0; N];
-
-            for i in (0..N).rev() {
-                bytes[i] = 0x30 + (n % 10) as u8;
-                n /= 10;
-
-                if n == 0 {
-                    break;
-                }
+        let mut bytes = [0; N];
+        for byte in bytes.iter_mut().rev() {
+            *byte = b'0' + (n % 10) as u8;
+            n /= 10;
+            if n == 0 {
+                return Some(Self { bytes });
             }
-
-            Some(Self { bytes })
-        } else {
-            None
         }
+        None
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -119,26 +142,26 @@ impl MoveCursor {
 }
 
 impl Iterator for MoveCursor {
-    type Item = OutputItem<'static>;
+    type Item = Item<'static>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.state {
                 MoveCursorState::ScrollPrefix => {
                     self.state = MoveCursorState::Scroll;
-                    break Some(OutputItem::Slice("\x1b[".as_bytes()));
+                    break Some(Item::Slice("\x1b[".as_bytes()));
                 }
                 MoveCursorState::Scroll => {
                     self.state = MoveCursorState::ScrollFinalByte;
 
-                    break Some(OutputItem::UintToBytes(
+                    break Some(Item::UintToBytes(
                         UintToBytes::from_uint(self.scroll.unsigned_abs()).unwrap(),
                     ));
                 }
                 MoveCursorState::ScrollFinalByte => {
                     self.state = MoveCursorState::MovePrefix;
 
-                    break Some(OutputItem::Slice(if self.scroll > 0 {
+                    break Some(Item::Slice(if self.scroll > 0 {
                         "S".as_bytes()
                     } else {
                         "T".as_bytes()
@@ -154,28 +177,28 @@ impl Iterator for MoveCursor {
                 }
                 MoveCursorState::MovePrefix => {
                     self.state = MoveCursorState::Row;
-                    break Some(OutputItem::Slice("\x1b[".as_bytes()));
+                    break Some(Item::Slice("\x1b[".as_bytes()));
                 }
                 MoveCursorState::Row => {
                     self.state = MoveCursorState::Separator;
-                    break Some(OutputItem::UintToBytes(
+                    break Some(Item::UintToBytes(
                         UintToBytes::from_uint(self.cursor.row + 1).unwrap(),
                     ));
                 }
                 MoveCursorState::Separator => {
                     self.state = MoveCursorState::Column;
-                    break Some(OutputItem::Slice(";".as_bytes()));
+                    break Some(Item::Slice(";".as_bytes()));
                 }
                 MoveCursorState::Column => {
                     self.state = MoveCursorState::MoveFinalByte;
 
-                    break Some(OutputItem::UintToBytes(
+                    break Some(Item::UintToBytes(
                         UintToBytes::from_uint(self.cursor.column + 1).unwrap(),
                     ));
                 }
                 MoveCursorState::MoveFinalByte => {
                     self.state = MoveCursorState::Done;
-                    break Some(OutputItem::Slice("H".as_bytes()));
+                    break Some(Item::Slice("H".as_bytes()));
                 }
                 MoveCursorState::Done => break None,
             }
@@ -298,16 +321,12 @@ where
     I: Iterator<Item = &'item str>,
     'item: 'a,
 {
-    fn transition(
-        &mut self,
-        new_state: Step<'a, I>,
-        output: OutputItem<'a>,
-    ) -> Option<OutputItem<'a>> {
+    fn transition(&mut self, new_state: Step<'a, I>, output: Item<'a>) -> Option<Item<'a>> {
         *self = new_state;
         Some(output)
     }
 
-    fn advance(&mut self, terminal: &mut Terminal) -> Option<OutputItem<'a>> {
+    fn advance(&mut self, terminal: &mut Terminal) -> Option<Item<'a>> {
         match self {
             Print(printable) => {
                 if let Some(item) = printable.next_item(terminal.columns_remaining()) {
@@ -321,7 +340,7 @@ where
                         PrintableItem::Newline => "\n\r",
                     };
 
-                    Some(OutputItem::Slice(s.as_bytes()))
+                    Some(Item::Slice(s.as_bytes()))
                 } else {
                     *self = Step::Done;
                     None
@@ -337,27 +356,27 @@ where
                 *self = Step::Done;
                 None
             }
-            MoveCursorToEdge => self.transition(Step::Done, OutputItem::Slice(b"\x1b[999;999H")),
-            Erase => self.transition(Step::Done, OutputItem::Slice("\x1b[J".as_bytes())),
+            MoveCursorToEdge => self.transition(Step::Done, Item::Slice(b"\x1b[999;999H")),
+            Erase => self.transition(Step::Done, Item::Slice("\x1b[J".as_bytes())),
             Newline => {
                 let mut position = terminal.get_position();
                 position.row += 1;
                 position.column = 0;
                 terminal.move_cursor(position);
 
-                self.transition(Step::Done, OutputItem::Slice("\n\r".as_bytes()))
+                self.transition(Step::Done, Item::Slice("\n\r".as_bytes()))
             }
-            Bell => self.transition(Step::Done, OutputItem::Slice("\x07".as_bytes())),
-            EndOfString => self.transition(Step::Done, OutputItem::EndOfString),
-            Abort => self.transition(Step::Done, OutputItem::Abort),
+            Bell => self.transition(Step::Done, Item::Slice("\x07".as_bytes())),
+            EndOfString => self.transition(Step::Done, Item::EndOfString),
+            Abort => self.transition(Step::Done, Item::Abort),
             ClearLine => {
                 terminal.move_cursor_to_start_of_line();
 
-                self.transition(Step::Done, OutputItem::Slice("\r\x1b[J".as_bytes()))
+                self.transition(Step::Done, Item::Slice("\r\x1b[J".as_bytes()))
             }
-            GetPosition => self.transition(Step::Done, OutputItem::Slice("\x1b[6n".as_bytes())),
-            SavePosition => self.transition(Step::Done, OutputItem::Slice(b"\x1b7")),
-            RestorePosition => self.transition(Step::Done, OutputItem::Slice(b"\x1b8")),
+            GetPosition => self.transition(Step::Done, Item::Slice("\x1b[6n".as_bytes())),
+            SavePosition => self.transition(Step::Done, Item::Slice(b"\x1b7")),
+            RestorePosition => self.transition(Step::Done, Item::Slice(b"\x1b8")),
             Done => None,
         }
     }
@@ -384,7 +403,7 @@ where
             if let Some(step) = self.steps.get_mut(self.pos) {
                 if let Some(step) = step.as_mut() {
                     if let Some(item) = step.advance(self.terminal) {
-                        break Some(item);
+                        break Some(OutputItem(item));
                     } else {
                         self.pos += 1;
                     }
@@ -398,14 +417,7 @@ where
     }
 }
 
-fn byte_position(s: &str, char_pos: usize) -> usize {
-    s.char_indices()
-        .skip(char_pos)
-        .map(|(pos, _)| pos)
-        .next()
-        .unwrap_or(s.len())
-}
-
+#[must_use = "drain and write the output before the next editing operation"]
 pub struct Output<'a, B: Buffer, I> {
     prompt: &'a Prompt<I>,
     buffer: &'a LineBuffer<B>,
@@ -418,7 +430,7 @@ where
     B: Buffer,
     I: Iterator<Item = &'item str> + Clone,
 {
-    pub fn new(
+    pub(crate) fn new(
         prompt: &'a Prompt<I>,
         buffer: &'a LineBuffer<B>,
         terminal: &'a mut Terminal,
@@ -444,7 +456,7 @@ where
         let offset = self.offset_from_position(position);
         let s = self.buffer.as_str();
 
-        let pos = byte_position(s, offset);
+        let pos = self.buffer.get_byte_position(offset);
 
         &s[pos..]
     }
@@ -500,6 +512,20 @@ where
         }
 
         let steps = match self.action {
+            OutputAction::Restore(cursor) => {
+                let target = self
+                    .terminal
+                    .relative_position((self.prompt.len() + cursor) as isize);
+                pack([
+                    ClearLine,
+                    Print(Printable::from_iter(self.prompt.iter())),
+                    Print(Printable::from_str(self.buffer.as_str())),
+                    Move(MoveCursorToPosition::new(target)),
+                ])
+            }
+            OutputAction::Suspend => {
+                pack([Move(MoveCursorToPosition::new(Position::new(0, 0))), Erase])
+            }
             OutputAction::MoveCursor(cursor_move) => {
                 let position = self.new_position(cursor_move);
 
@@ -573,11 +599,7 @@ where
                 ])
             }
             OutputAction::RingBell => pack([Bell]),
-            OutputAction::ClearAndPrintPrompt => pack([
-                ClearLine,
-                Print(Printable::from_iter(self.prompt.iter())),
-                GetPosition,
-            ]),
+            OutputAction::Locate => pack([GetPosition]),
             OutputAction::ClearAndPrintBuffer => {
                 let position = self.new_position(CursorMove::Start);
 
@@ -590,8 +612,27 @@ where
             OutputAction::ProbeSize => {
                 pack([SavePosition, MoveCursorToEdge, GetPosition, RestorePosition])
             }
+            OutputAction::RedrawAt(cursor) => {
+                let target = self
+                    .terminal
+                    .relative_position(cursor as isize - self.current_offset() as isize);
+                pack([
+                    Move(MoveCursorToPosition::new(
+                        self.new_position(CursorMove::Start),
+                    )),
+                    Erase,
+                    Print(Printable::from_str(self.buffer.as_str())),
+                    Move(MoveCursorToPosition::new(target)),
+                ])
+            }
 
-            OutputAction::Done => pack([Newline, EndOfString]),
+            OutputAction::Done => pack([
+                Move(MoveCursorToPosition::new(
+                    self.new_position(CursorMove::End),
+                )),
+                Newline,
+                EndOfString,
+            ]),
             OutputAction::Abort => pack([Newline, Abort]),
             OutputAction::Nothing => pack([]),
         };
@@ -630,6 +671,11 @@ mod tests {
         assert_eq!(to_string::<4>(10), "10");
 
         assert_eq!(to_string::<4>(9999), "9999");
+        assert!(UintToBytes::<4>::from_uint(10000usize).is_none());
+        assert_eq!(
+            to_string::<{ usize::MAX.ilog10() as usize + 1 }>(usize::MAX),
+            usize::MAX.to_string()
+        );
     }
 
     #[test]
@@ -767,10 +813,10 @@ mod tests {
             &prompt,
             &line_buffer,
             &mut terminal,
-            OutputAction::ClearAndPrintPrompt,
+            OutputAction::Restore(0),
         ));
 
-        assert_eq!(result, "\r\x1b[J> \x1b[6n");
+        assert_eq!(result, "\r\x1b[J> \x1b[1;3H");
 
         line_buffer.insert_str(0, "Hello, world!").unwrap();
 

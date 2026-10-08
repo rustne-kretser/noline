@@ -8,11 +8,11 @@ use embedded_io::{Read, ReadExactError, Write};
 
 use crate::error::NolineError;
 
-use crate::history::{get_history_entries, CircularSlice, History};
+use crate::history::{get_history_entries, CircularSlice, History, HistoryNavigator};
 use crate::line_buffer::{Buffer, LineBuffer};
 
 use crate::core::{Line, Prompt};
-use crate::output::{Output, OutputItem};
+use crate::output::{Event, Output};
 use crate::terminal::Terminal;
 
 /// Line editor for synchronous IO
@@ -25,7 +25,7 @@ where
 {
     buffer: LineBuffer<B>,
     terminal: Terminal,
-    history: H,
+    nav: HistoryNavigator<H>,
 }
 
 impl<E> From<E> for NolineError
@@ -42,7 +42,7 @@ where
     B: Buffer,
     H: History,
 {
-    /// Create and initialize line editor
+    /// Create an editor. Terminal initialization occurs when starting a line.
     pub fn new<IO: Read + Write>(
         buffer: LineBuffer<B>,
         history: H,
@@ -53,7 +53,7 @@ where
         Ok(Self {
             buffer,
             terminal,
-            history,
+            nav: HistoryNavigator::new(history),
         })
     }
 
@@ -65,21 +65,22 @@ where
         IO: Read + Write,
         I: Iterator<Item = &'item str> + Clone,
     {
+        let mut result = None;
         for item in output {
             if let Some(bytes) = item.get_bytes() {
-                io.write(bytes)?;
+                io.write_all(bytes)?;
             }
 
-            io.flush()?;
-
-            match item {
-                OutputItem::EndOfString => return Ok(Some(())),
-                OutputItem::Abort => return Err(NolineError::Aborted),
-                _ => (),
-            }
+            result = Some(match item.event() {
+                Some(Event::Submitted) => Ok(Some(())),
+                Some(Event::Aborted) => Err(NolineError::Aborted),
+                _ => Ok(None),
+            });
         }
-
-        Ok(None)
+        if result.is_some() {
+            io.flush()?;
+        }
+        result.unwrap_or(Ok(None))
     }
 
     fn read_byte<IO>(io: &mut IO) -> Result<u8, NolineError>
@@ -97,7 +98,15 @@ where
         }
     }
 
-    /// Read line from `stdin`
+    /// Borrow a line for application-driven editing. Start it before feeding input.
+    pub fn line<'item, I>(&mut self, prompt: impl Into<Prompt<I>>) -> Line<'_, B, H, I>
+    where
+        I: Iterator<Item = &'item str> + Clone,
+    {
+        Line::new(prompt, &mut self.buffer, &mut self.terminal, &mut self.nav)
+    }
+
+    /// Read a line from the supplied I/O.
     pub fn readline<'a, 'item, IO, I>(
         &'a mut self,
         prompt: impl Into<Prompt<I>>,
@@ -107,31 +116,13 @@ where
         IO: Read + Write,
         I: Iterator<Item = &'item str> + Clone,
     {
-        let mut line = Line::new(
-            prompt,
-            &mut self.buffer,
-            &mut self.terminal,
-            &mut self.history,
-        );
-
-        let mut reset = line.reset();
-
-        Self::handle_output(reset.start(), io)?;
+        let mut line = self.line(prompt);
+        Self::handle_output(line.start(), io)?;
 
         loop {
             let byte = Self::read_byte(io)?;
 
-            if let Some(output) = reset.advance(byte) {
-                Self::handle_output(output, io)?;
-            } else {
-                break;
-            }
-        }
-
-        loop {
-            let byte = Self::read_byte(io)?;
-
-            if Self::handle_output(line.advance(byte), io)?.is_some() {
+            if Self::handle_output(line.advance(byte)?, io)?.is_some() {
                 break;
             }
         }
@@ -141,12 +132,12 @@ where
 
     /// Load history from iterator
     pub fn load_history<'a>(&mut self, entries: impl Iterator<Item = &'a str>) -> usize {
-        self.history.load_entries(entries)
+        self.nav.history.load_entries(entries)
     }
 
     /// Get history as iterator over circular slices
     pub fn get_history(&self) -> impl Iterator<Item = CircularSlice<'_>> {
-        get_history_entries(&self.history)
+        get_history_entries(&self.nav.history)
     }
 }
 
@@ -166,6 +157,7 @@ pub mod tests {
     struct MockStdout {
         buffer: Vec<u8>,
         tx: Sender<u8>,
+        flushes: usize,
     }
 
     impl MockStdout {
@@ -173,6 +165,7 @@ pub mod tests {
             Self {
                 buffer: Vec::new(),
                 tx,
+                flushes: 0,
             }
         }
     }
@@ -228,11 +221,13 @@ pub mod tests {
 
     impl embedded_io::Write for MockIO {
         fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            let buf = &buf[..buf.len().min(1)];
             self.stdout.buffer.extend(buf);
             Ok(buf.len())
         }
 
         fn flush(&mut self) -> Result<(), Self::Error> {
+            self.stdout.flushes += 1;
             for byte in self.stdout.buffer.drain(0..) {
                 self.stdout.tx.send(byte).unwrap();
             }
@@ -243,9 +238,81 @@ pub mod tests {
 
     impl core::fmt::Write for MockIO {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            self.write(s.as_bytes()).or(Err(core::fmt::Error))?;
+            self.write_all(s.as_bytes()).or(Err(core::fmt::Error))?;
             Ok(())
         }
+    }
+
+    #[test]
+    fn flush_output_batches() {
+        for end in [b'\r', 3] {
+            let (tx, input) = unbounded();
+            let (output, rx) = unbounded();
+            let mut io = MockIO::new(MockStdin::new(input), MockStdout::new(output));
+            for byte in b"\x1b[4;80R\x1b[1;3R\x1b".iter().copied().chain([end]) {
+                tx.send(byte).unwrap();
+            }
+            drop(tx);
+            let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
+            assert!(matches!(
+                (end, editor.readline("> ", &mut io)),
+                (b'\r', Ok("")) | (3, Err(crate::error::NolineError::Aborted))
+            ));
+            assert_eq!(io.stdout.flushes, 4);
+            assert!(io.stdout.buffer.is_empty());
+            assert!(rx.try_iter().collect::<Vec<_>>().ends_with(b"\n\r"));
+        }
+    }
+
+    #[test]
+    fn invalid_geometry_recovers() {
+        for report in [
+            std::format!("\x1b[{};1R", usize::MAX),
+            "\x1b[4;20R\x1b[5;1R".into(),
+        ] {
+            let (tx, rx) = unbounded();
+            let (output_tx, _output_rx) = unbounded();
+            let mut io = MockIO::new(MockStdin::new(rx), MockStdout::new(output_tx));
+            for byte in (report + "\x1b[4;20R\x1b[1;3Rok\r").bytes() {
+                tx.send(byte).unwrap();
+            }
+            drop(tx);
+            let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
+            assert!(matches!(
+                editor.readline("> ", &mut io),
+                Err(crate::error::NolineError::Aborted)
+            ));
+            assert_eq!(editor.readline("> ", &mut io).unwrap(), "ok");
+        }
+    }
+
+    #[test]
+    fn prompts_borrow_per_line() {
+        let mut io = MockIO::new(
+            MockStdin::new(unbounded().1),
+            MockStdout::new(unbounded().0),
+        );
+        let mut editor = EditorBuilder::new_unbounded()
+            .with_unbounded_history()
+            .build_sync(&mut io)
+            .unwrap();
+        for text in ["first", "second"] {
+            let prompt = std::format!("{text}> ");
+            let mut line = editor.line(prompt.as_str());
+            line.start_at(4, 80, 0).unwrap().into_vec();
+            if text == "second" {
+                line.advance(0x10).unwrap().into_vec();
+                assert_eq!(line.as_str(), "first");
+                line.advance(0x0e).unwrap().into_vec();
+            }
+            for byte in text.bytes().chain([b'\r']) {
+                line.advance(byte).unwrap().into_iter().for_each(drop);
+            }
+            let input = line.into_str();
+            drop(prompt);
+            assert_eq!(input, text);
+        }
+        assert_eq!(editor.get_history().count(), 2);
     }
 
     #[test]
@@ -258,7 +325,11 @@ pub mod tests {
         let handle = thread::spawn(move || {
             let mut editor = EditorBuilder::new_unbounded().build_sync(&mut io).unwrap();
 
-            if let Ok(s) = editor.readline("> ", &mut io) {
+            let result = {
+                let prompt = std::string::String::from("> ");
+                editor.readline(prompt.as_str(), &mut io)
+            };
+            if let Ok(s) = result {
                 Some(s.to_string())
             } else {
                 None
@@ -277,7 +348,7 @@ pub mod tests {
             input_tx.send(b).unwrap();
         }
 
-        for &b in b"\r\x1b[J> \x1b[6n" {
+        for &b in b"\x1b[6n" {
             let received = output_rx
                 .recv_timeout(::core::time::Duration::from_millis(1000))
                 .unwrap();
@@ -285,7 +356,7 @@ pub mod tests {
             assert_eq!(received, b);
         }
 
-        for &b in b"\x1b[1;3R" {
+        for &b in b"\x1b[1;1R" {
             input_tx.send(b).unwrap();
         }
 
